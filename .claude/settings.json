@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "sh .claude/hooks/greentopo-heads.sh",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

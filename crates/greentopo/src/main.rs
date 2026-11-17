@@ -348,12 +348,35 @@ fn main() -> ExitCode {
     ExitCode::from(code as u8)
 }
 
-/// Load, or print why not and give the caller the right failure code.
+/// One notice per vendored pack still keyed with the old name `aval:`.
+fn legacy_key_notices(l: &Loaded) -> Vec<String> {
+    let rels = &l.graph.registry().packs;
+    l.packs
+        .iter()
+        .zip(rels)
+        .filter(|(pack, _)| {
+            pack.warnings
+                .contains(&greentopo_core::pack::PackWarning::LegacyKey)
+        })
+        .map(|(_, rel)| add::legacy_key_notice(&l.root, rel))
+        .collect()
+}
+
+/// Load, or print why not and give the caller the right failure code. A pack
+/// read under the old name prints its notice on
+/// stderr, except under `--json` and `--quiet`, and except for the commands
+/// that fold the notice into their own output (`check`, `add`).
 fn loaded(args: &Args) -> Result<Loaded, i32> {
-    load::load(&args.dir).map_err(|e| {
+    let l = load::load(&args.dir).map_err(|e| {
         emit_error(args, E_INVALID, &e.to_string(), e.findings());
         E_INVALID
-    })
+    })?;
+    if !args.json && !args.quiet && args.command != "check" && args.command != "add" {
+        for notice in legacy_key_notices(&l) {
+            eprintln!("warning: {}", notice);
+        }
+    }
+    Ok(l)
 }
 
 fn emit_error(args: &Args, exit: i32, message: &str, findings: &[Finding]) {
@@ -940,9 +963,15 @@ fn cmd_check(args: &Args) -> i32 {
     // Warnings: the same condition as a cross-scope exit 5, reported before a
     // query meets it. They never change the exit status.
     let warnings = l.graph.in_scopes_conflicts();
+    let legacy = legacy_key_notices(&l);
     if !args.json {
         for warning in &warnings {
             eprintln!("warning: {}", warning);
+        }
+        if !args.quiet {
+            for notice in &legacy {
+                eprintln!("warning: {}", notice);
+            }
         }
     }
 
@@ -962,6 +991,13 @@ fn cmd_check(args: &Args) -> i32 {
                 warnings
                     .iter()
                     .map(render::finding_json)
+                    .chain(legacy.iter().map(|notice| {
+                        render::finding_json(&Finding::new(
+                            Layer::A,
+                            "pack-legacy-key",
+                            notice.clone(),
+                        ))
+                    }))
                     .collect::<Vec<_>>(),
             );
         println!("{}", j);
@@ -1372,7 +1408,7 @@ fn cmd_add_check(args: &Args) -> i32 {
     let mut behind = 0;
     let mut edited = 0;
     let mut unknown = 0;
-    for o in add::origins(&l.root, packs) {
+    for (index, o) in add::origins(&l.root, packs).into_iter().enumerate() {
         let o = match o {
             Ok(o) => o,
             Err(e) => {
@@ -1383,7 +1419,20 @@ fn cmd_add_check(args: &Args) -> i32 {
                 continue;
             }
         };
-        match add::standing(&l.root, &o) {
+        let (standing, legacy_file) = add::standing(&l.root, &o);
+        // One notice per pack: a pack read through the old file name has said
+        // so, and its `aval:` key is the same fact.
+        if !quiet {
+            if legacy_file {
+                eprintln!("warning: {}", add::legacy_file_notice(&o.source));
+            } else if l.packs.get(index).is_some_and(|pack| {
+                pack.warnings
+                    .contains(&greentopo_core::pack::PackWarning::LegacyKey)
+            }) {
+                eprintln!("warning: {}", add::legacy_key_notice(&l.root, &o.rel));
+            }
+        }
+        match standing {
             add::Standing::Current => {
                 if !quiet {
                     println!(
@@ -1519,7 +1568,19 @@ fn cmd_add(args: &Args) -> i32 {
     let mut vendored = Vec::new();
     for spec in &args.positional {
         match add::resolve_one(spec, args.as_name.as_deref()) {
-            Ok(v) => vendored.push(v),
+            Ok(v) => {
+                if !args.quiet {
+                    if v.legacy_file {
+                        eprintln!("warning: {}", add::legacy_file_notice(&v.source.label));
+                    } else if v.legacy_key {
+                        eprintln!(
+                            "warning: {}",
+                            add::legacy_key_published_notice(&v.source.label)
+                        );
+                    }
+                }
+                vendored.push(v)
+            }
             Err(e) => {
                 eprintln!("greentopo: {}", e);
                 return E_FAIL;

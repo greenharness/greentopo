@@ -20,6 +20,10 @@
   "author": "Frederic Rousseau",
   "type": "commonjs",
   "_comment_name": "The package is `@greenharness/greentopo` and the binary it installs is `greentopo`. It lives under the @greenharness scope with greengate's packages (ADR-0074); crates.io and Homebrew carry the plain name.",
+  "_comment_access": "Scoped packages default to RESTRICTED. The workflow passes --access public; this says the same in the manifest so a hand-run `npm publish` cannot publish the root as private.",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "greentopo": "bin/greentopo.js"
   },

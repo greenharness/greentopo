@@ -338,7 +338,16 @@ pub fn short(id: &str) -> &str {
 /// universally allowed (`uploadpack.allowAnySHA1InWant`); comparing what
 /// arrived against what was resolved catches a ref that moved between the two
 /// calls, which is the case the id exists to close.
-pub fn fetch(s: &Source, id: &str, into: &Path, file: &str) -> Result<String, String> {
+///
+/// `files` are tried in order against the one fetched commit, and the first
+/// that exists is returned with its name, so the caller can tell which one
+/// answered.
+pub fn fetch<'a>(
+    s: &Source,
+    id: &str,
+    into: &Path,
+    files: &[&'a str],
+) -> Result<(String, &'a str), String> {
     std::fs::create_dir_all(into).map_err(|e| format!("{}: {}", into.display(), e))?;
     git(&["init", "-q"], Some(into)).map_err(|e| format!("{}: {}", s.label, e))?;
     git(&["fetch", "-q", "--depth", "1", &s.url, &s.rev], Some(into))
@@ -354,8 +363,17 @@ pub fn fetch(s: &Source, id: &str, into: &Path, file: &str) -> Result<String, St
             s.label, s.rev, id, got
         ));
     }
-    git(&["show", &format!("FETCH_HEAD:{}", file)], Some(into))
-        .map_err(|_| format!("{}: has no {} at {}", s.label, file, short(id)))
+    for file in files {
+        if let Ok(body) = git(&["show", &format!("FETCH_HEAD:{}", file)], Some(into)) {
+            return Ok((body, file));
+        }
+    }
+    Err(format!(
+        "{}: has no {} at {}",
+        s.label,
+        files.join(" or "),
+        short(id)
+    ))
 }
 
 /// A scratch directory that removes itself, on the failure path too.

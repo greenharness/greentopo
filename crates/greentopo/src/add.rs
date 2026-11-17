@@ -57,7 +57,15 @@ pub struct Vendored {
     /// Records the pack declares, for the preview.
     pub records: usize,
     pub keys: Vec<String>,
+    /// The source published the pack as `LEGACY_FILE` (the old name).
+    pub legacy_file: bool,
+    /// The published pack is keyed `aval:`, the old name.
+    pub legacy_key: bool,
 }
+
+/// The names a source may publish its pack under, in the order they are tried.
+/// The second is the fallback read for packs written before the rename.
+pub const PUBLISHED_AS: [&str; 2] = [pack::FILE, pack::LEGACY_FILE];
 
 /// The provenance header. Comments, so the parser skips them and the file is
 /// still exactly the pack the producer published plus a note saying where it
@@ -71,7 +79,7 @@ fn banner(s: &Source, id: &str) -> String {
 }
 
 /// Read back what a vendored file says about its own origin.
-fn provenance(text: &str) -> Option<(String, String, String)> {
+pub fn provenance(text: &str) -> Option<(String, String, String)> {
     let field = |k: &str| -> Option<String> {
         text.lines()
             .take_while(|l| l.starts_with('#'))
@@ -85,6 +93,39 @@ fn provenance(text: &str) -> Option<(String, String, String)> {
             })
     };
     Some((field("source:")?, field("rev:")?, field("commit:")?))
+}
+
+/// The notice for a vendored pack keyed with the old name `aval:`. It names
+/// the command that re-vendors it from the source its banner records.
+pub fn legacy_key_notice(root: &Path, rel: &str) -> String {
+    let source = std::fs::read_to_string(root.join(rel))
+        .ok()
+        .and_then(|text| provenance(&text))
+        .map(|(source, _, _)| source);
+    match source {
+        Some(source) => format!(
+            "{rel} is keyed `aval:`, the old name; run `greentopo add {source}` to vendor the renamed pack"
+        ),
+        None => format!(
+            "{rel} is keyed `aval:`, the old name; run `greentopo add` with its source to vendor the renamed pack"
+        ),
+    }
+}
+
+/// The notice for a source that publishes its pack under the old file name.
+pub fn legacy_file_notice(source: &str) -> String {
+    format!(
+        "{source} publishes {}; run `greentopo pack --write` there to publish {}",
+        pack::LEGACY_FILE,
+        pack::FILE
+    )
+}
+
+/// The notice for a pack just fetched whose generator key is the old name.
+pub fn legacy_key_published_notice(source: &str) -> String {
+    format!(
+        "{source} publishes a pack keyed `aval:`, the old name; run `greentopo pack --write` there"
+    )
 }
 
 pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String> {
@@ -109,7 +150,7 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
     }
 
     let scratch = Scratch::new(&name);
-    let body = fetch::fetch(&source, &id, &scratch.0, pack::FILE)?;
+    let (body, file) = fetch::fetch(&source, &id, &scratch.0, &PUBLISHED_AS)?;
 
     let rel = format!("{}/{}.{}", DIR, name, EXT);
     // Parse before writing, with the parser the loader itself uses. A pack
@@ -131,6 +172,8 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
         rel,
         records: parsed.adrs.len(),
         keys: parsed.keys.iter().map(|k| k.name.clone()).collect(),
+        legacy_file: file == pack::LEGACY_FILE,
+        legacy_key: parsed.warnings.contains(&pack::PackWarning::LegacyKey),
         source,
         id,
         body,
@@ -547,15 +590,18 @@ pub fn origins(root: &Path, rels: &[String]) -> Vec<Result<Origin, String>> {
 /// a check that needed the network would fail on a plane, in a CI job with no
 /// credential for the source, and in every repository whose forge cannot see
 /// the other one — which is the situation this whole mechanism exists for.
-pub fn standing(root: &Path, o: &Origin) -> Standing {
+///
+/// The second value says the source published the pack under the old file
+/// name, which is worth one notice however many fetches it took.
+pub fn standing(root: &Path, o: &Origin) -> (Standing, bool) {
     let spec = format!("{}@{}", o.source, o.rev);
     let Ok(source) = fetch::parse_source(&spec) else {
-        return Standing::Unmarked;
+        return (Standing::Unmarked, false);
     };
     match fetch::resolve(&source) {
         Ok(id) if id == o.commit => unedited(root, o, &source),
         Ok(id) => moved(root, o, &source, id),
-        Err(e) => Standing::Unknown(e),
+        Err(e) => (Standing::Unknown(e), false),
     }
 }
 
@@ -563,16 +609,17 @@ pub fn standing(root: &Path, o: &Origin) -> Standing {
 /// only if that commit publishes different declarations; a fetch that fails
 /// stays `Behind`, since the revision already answered that it moved and an
 /// `Unknown` would hide a real move under `--quiet`.
-fn moved(root: &Path, o: &Origin, source: &Source, id: String) -> Standing {
+fn moved(root: &Path, o: &Origin, source: &Source, id: String) -> (Standing, bool) {
     let scratch = Scratch::new(&format!("{}-moved", o.name));
-    let Ok(published) = fetch::fetch(source, &id, &scratch.0, pack::FILE) else {
-        return Standing::Behind(id);
+    let Ok((published, file)) = fetch::fetch(source, &id, &scratch.0, &PUBLISHED_AS) else {
+        return (Standing::Behind(id), false);
     };
+    let legacy = file == pack::LEGACY_FILE;
     match std::fs::read_to_string(root.join(&o.rel)) {
         Ok(have) if declares_the_same_but_generator(&have, &published) => {
-            Standing::CurrentMoved(id)
+            (Standing::CurrentMoved(id), legacy)
         }
-        _ => Standing::Behind(id),
+        _ => (Standing::Behind(id), legacy),
     }
 }
 
@@ -582,7 +629,9 @@ fn moved(root: &Path, o: &Origin, source: &Source, id: String) -> Standing {
 fn declares_the_same_but_generator(a: &str, b: &str) -> bool {
     fn without_generator(mut n: yaml::Node) -> yaml::Node {
         if let yaml::Value::Map(m) = &mut n.value {
-            m.retain(|(k, _)| k != "greentopo");
+            // The old key name is the same generator field, so a pack
+            // republished under the new key still compares equal.
+            m.retain(|(k, _)| k != "greentopo" && k != "aval");
         }
         n
     }
@@ -604,18 +653,19 @@ fn declares_the_same_but_generator(a: &str, b: &str) -> bool {
 /// Declarations, never bytes: the vendored file lives where formatters run, and
 /// one that reindented it has edited nothing. What `edited` means is that
 /// somebody changed what this repository believes another repository decided.
-fn unedited(root: &Path, o: &Origin, source: &Source) -> Standing {
+fn unedited(root: &Path, o: &Origin, source: &Source) -> (Standing, bool) {
     let scratch = Scratch::new(&o.name);
-    let published = match fetch::fetch(source, &o.commit, &scratch.0, pack::FILE) {
+    let (published, file) = match fetch::fetch(source, &o.commit, &scratch.0, &PUBLISHED_AS) {
         Ok(p) => p,
-        Err(e) => return Standing::Unknown(e),
+        Err(e) => return (Standing::Unknown(e), false),
     };
+    let legacy = file == pack::LEGACY_FILE;
     match std::fs::read_to_string(root.join(&o.rel)) {
-        Ok(have) if declares_the_same(&have, &published) => Standing::Current,
-        Ok(_) => Standing::Edited,
+        Ok(have) if declares_the_same(&have, &published) => (Standing::Current, legacy),
+        Ok(_) => (Standing::Edited, legacy),
         // `origins` read this file a moment ago, so this is a race or a
         // permission change. Not an answer, and not reported as one.
-        Err(e) => Standing::Unknown(format!("{}: {}", o.rel, e)),
+        Err(e) => (Standing::Unknown(format!("{}: {}", o.rel, e)), legacy),
     }
 }
 
@@ -688,6 +738,8 @@ keys:
             body: BODY.to_string(),
             records: 1,
             keys: vec!["stack.sql-layer".into()],
+            legacy_file: false,
+            legacy_key: false,
         }
     }
 
