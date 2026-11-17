@@ -263,6 +263,20 @@ Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo
 - The `adr.yaml` pin is back on the 2.0.0 download (greentopo#61), the tap seed is homebrew-tap#16, and the map note is decisions#221.
 - The released x86_64-apple-darwin binary prints `greentopo 2.0.0` and passes `greentopo check` here, with one fallback warning.
 
+
+### Results, Phase 3 (observed)
+
+| Check | Expected | Actual |
+|---|---|---|
+| release run 44003398264 `conclusion` | `success` for build, crates, npm, tap | `success` (attempt 2); all 14 jobs `success`, crates.io re-run after the token fix |
+| `cargo search` / crates.io API `greentopo`, `greentopo-core` | 2.0.0 | 2.0.0, 2.0.0 |
+| `npm view @greenharness/greentopo version` (and the six platform packages) | 2.0.0 | 2.0.0 (all seven) |
+| `brew info fredericrous/tap/greentopo` | 2.0.0 | 2.0.0; `verify-brew` job `success` |
+| `brew info fredericrous/tap/aval` | still 1.12.0 | 1.12.0 |
+| tap `formula_renames.json` | no `aval` entry | `{"amont":"greengate","greenpiste":"greenbelay"}` (unchanged) |
+| homebrew-tap#16 (seed) | merged before the tag | merged |
+| 7-day watch of fleet `adr.yaml` downloads via the old path | 0 failures | started 2026-11-17 at the transfer; check due 2026-11-24 |
+
 ## After release
 
 - For 7 days after the transfer: count fleet `adr.yaml` runs that fail at the download step (`gh release download --repo fredericrous/aval`). Expected 0; if any fail and no fix lands within a day, transfer the repo back (Rollback).
