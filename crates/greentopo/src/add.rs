@@ -142,9 +142,32 @@ pub fn legacy_key_notice(root: &Path, rel: &str) -> String {
         .and_then(|text| provenance(&text))
         .map(|(source, _, _)| source);
     match source {
-        Some(source) => format!("{rel} uses the old `aval:` key; run `greentopo add {source}`"),
+        Some(source) => {
+            // A pack vendored under `--as` keeps that name only when the
+            // command says it again; without it, `add` writes a second pack.
+            let name = crate::load::pack_name(rel);
+            let as_name = if name == default_name(&source) {
+                String::new()
+            } else {
+                format!(" --as {name}")
+            };
+            format!("{rel} uses the old `aval:` key; run `greentopo add {source}{as_name}`")
+        }
         None => format!("{rel} uses the old `aval:` key; run `greentopo add` with its source"),
     }
+}
+
+/// The name a pack is vendored under when `--as` is not given: the last
+/// segment of the source, which is the repository's own name and is what a
+/// person would call it. `--as` exists for the case where two forges hold a
+/// `decisions` each.
+fn default_name(label: &str) -> String {
+    label
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or("pack")
+        .trim_end_matches(".git")
+        .to_string()
 }
 
 /// The notice for a source that publishes its pack under the old file name.
@@ -169,16 +192,7 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
 
     let name = match as_name {
         Some(n) => n.to_string(),
-        // The last segment of the source, which is the repository's own name
-        // and is what a person would call it. `--as` exists for the case where
-        // two forges hold a `decisions` each.
-        None => source
-            .label
-            .rsplit(['/', ':'])
-            .next()
-            .unwrap_or("pack")
-            .trim_end_matches(".git")
-            .to_string(),
+        None => default_name(&source.label),
     };
     if let Some(m) = pack::bad_name(&name) {
         return Err(format!("{} — name it with `--as <name>`", m));

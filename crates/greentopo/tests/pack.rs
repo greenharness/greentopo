@@ -1277,6 +1277,9 @@ fn check_reads_an_aval_keyed_pack_with_one_warning() {
         "{}",
         warnings[0]
     );
+    // Vendored under `--as fleet`: the command names it again, or `add`
+    // would write a second pack and this one would keep warning.
+    assert!(warnings[0].contains("--as fleet`"), "{}", warnings[0]);
     assert!(!got.out.contains("warning:"), "{}", got.out);
 
     let quiet = run(&c, &["check", "--quiet"]);
