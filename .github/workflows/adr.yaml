@@ -1,9 +1,9 @@
 name: ADR
 
-# A separate workflow rather than a job in ci.yaml, deliberately. The main CI
-# has suites of its own to pay for, and keeping the ADR check apart queues
-# nothing else. The job builds the checkout's own binary until the 2.0.0
-# follow-up restores the `GREENTOPO_VERSION` pin.
+# A separate workflow rather than a job in ci.yaml, deliberately. This job's
+# `GREENTOPO_VERSION` changes on every greentopo release, and the main CI has suites of
+# its own to pay for. Keeping the ADR check apart means a pin bump costs
+# seconds and queues nothing else.
 on:
   push:
     branches: [main]
@@ -30,17 +30,47 @@ jobs:
       # That is why this job is not redundant: a contributor without `greentopo`
       # installed is waved through locally and must still be unable to merge a
       # corpus that no longer resolves.
-      # Until greentopo 2.0.0 is released there is no greentopo binary to
-      # download, and a 1.x aval fails `hook install --check` against the
-      # renamed hook script. So this job builds the checkout's own binary;
-      # the release follow-up restores the pinned download (plan
-      # docs/plans/2026-11-16-aval-becomes-greentopo.md, Phase 3).
-      - name: Build greentopo from this checkout
+      - name: Ensure greentopo
+        env:
+          GREENTOPO_VERSION: 2.0.0
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cargo build --release --locked --bin greentopo
-          echo "$GITHUB_WORKSPACE/target/release" >> "$GITHUB_PATH"
-          "$GITHUB_WORKSPACE/target/release/greentopo" --version
+          # The baked binary is an optimisation, not the pin. Accepting whatever
+          # the runner image happens to carry meant a version bump was silently
+          # ignored until the image rebuilt — which is how a 0.3.1 pin once ran
+          # 0.2.0 and reported the projection stale.
+          have=""
+          if command -v greentopo > /dev/null 2>&1; then
+            have="$(greentopo --version 2>/dev/null | awk '{print $2}')"
+          fi
+          if [ "$have" = "$GREENTOPO_VERSION" ]; then
+            greentopo --version
+            exit 0
+          fi
+          echo "::warning::runner carries greentopo ${have:-none}, this repository pins ${GREENTOPO_VERSION} — downloading it"
+          mkdir -p "$RUNNER_TEMP/bin"
+          # Through the API (`gh release download`), not the public download URL:
+          # that route throttles anonymous downloads, and it returned 504 for hours
+          # on 2026-11-08 while the API served the same files.
+          asset="greentopo-${GREENTOPO_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          for attempt in 1 2 3; do
+            rc=0
+            timeout 120 gh release download "v${GREENTOPO_VERSION}" --repo greenharness/greentopo \
+              --pattern "$asset" -O "$RUNNER_TEMP/$asset" --clobber || rc=$?
+            [ "$rc" = 0 ] && break
+            if [ "$attempt" = 3 ]; then
+              echo "::error::could not download $asset from greenharness/greentopo v${GREENTOPO_VERSION} (exit $rc; 124 = timed out after 120 s)"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          tar xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/bin" --strip-components=1 \
+            "greentopo-${GREENTOPO_VERSION}-x86_64-unknown-linux-gnu/greentopo"
+          chmod +x "$RUNNER_TEMP/bin/greentopo"
+          # GITHUB_PATH applies to LATER steps only.
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/greentopo" --version
 
       # This repository keeps no records of its own: every decision it answers
       # from is vendored. What this proves is that the vendored pack still
