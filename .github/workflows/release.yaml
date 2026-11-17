@@ -506,16 +506,15 @@ jobs:
 
           # AN EXPLICIT LIST, NOT A GLOB.
           #
-          # The platform packages are scoped now, so they lay out under
-          # `dist/npm/@greenharness/greentopo-…` and `dist/npm/@greenharness/greentopo-*` matches nothing
-          # at all — the loop would silently publish ZERO platform packages
-          # and then publish `greentopo` against six dependencies that do not
-          # exist. npm versions are immutable, so that is a version bump to
-          # recover from, not a re-run.
-          #
-          # Even flat, a glob was the wrong shape: it has to match every
+          # The platform packages lay out under
+          # `dist/npm/@greenharness/greentopo-…`, so a glob such as
+          # `dist/npm/@greenharness/greentopo-*` does match the platform
+          # directories. It is still the wrong shape: it has to match every
           # platform package and never the root, and nothing enforces that
-          # but care. `npm-pack.sh`'s TARGETS table is the source of truth,
+          # but care. A loop that missed one would publish `greentopo`
+          # against dependencies that do not exist, and npm versions are
+          # immutable, so that is a version bump to recover from, not a
+          # re-run. `npm-pack.sh`'s TARGETS table is the source of truth,
           # and `npm_packaging.rs` asserts this list agrees with it.
           for t in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu linux-x64-musl win32-x64; do
             publish "dist/npm/@greenharness/greentopo-$t"
@@ -523,7 +522,7 @@ jobs:
           publish dist/npm/@greenharness/greentopo
 
           echo "### Published to npm" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`npm i -D greentopo\` — v${{ needs.guard.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`npm i -D @greenharness/greentopo\` — v${{ needs.guard.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
 
   # IMMUTABLE, so a bad publish can only be yanked and superseded, never fixed.
   # The binaries are the cheaper thing to get wrong.

@@ -54,49 +54,56 @@ const USAGE: &str = "\
 greentopo — the current architecture decision, as a typed answer
 
 USAGE
-    greentopo resolve <key> [--scope <scope>]   what is decided, and nothing else
-    greentopo relevant [--path <p>]…            which keys bear on what you are about
-                  [--text <words>]         to touch, ranked. ADVISORY: a
-                  [--changed] [--top <n>]  suggestion, never a verdict — resolve
-                                           each key it names
-    greentopo keys [--names]                    the vocabulary: every key, where it
-                                           is answerable, where it is decided;
-                                           --names omits where it is decided
-    greentopo rules [--level <level>]           the adopted rules, one line each;
-               [--adopted-by <record>]     --level constraint|heuristic, --all
-               [--all] [--all-traits]      adds the inactive ones with the reason,
-               [--index] [--governs code]  --all-traits the ones about traits
-               [--full]                    this repository's areas do not name,
-                                           --index only their ids, by prefix,
-                                           --governs code only code rules,
-                                           --full each rule's text
-    greentopo traits [--summary]                what this repository says it is, and
-                [--detect | --check]       what its tracked files suggest;
-                                           ADVISORY detection, never a filter
-    greentopo rule <id>                         one rule, with its translation and why
-    greentopo check                             every invariant; the gate runs this
-    greentopo heads [--write | --check]         the projection
-    greentopo show <ADR-NNNN>                   derived status of one document
-    greentopo history <key> [--scope <scope>]   the chain, which is history not authority
-    greentopo migrate <dir>                     report what converting a legacy corpus needs
-    greentopo hook install [--check]            put the heads in front of an agent
-    greentopo hook uninstall [--write]          remove what install wrote: the marked
-                        [--check]          script and its settings entry; without
-                                           --write only says what it would remove
-    greentopo pack [--write | --check]          this corpus's declarations, for others to read
-    greentopo add <source>… [--dry-run]         vendor another repository's declarations
-    greentopo add --check [--quiet]             are the vendored packs still current;
-                     [--budget <seconds>]  --quiet speaks only when one is not,
-                                           --budget kills a remote call late
-    greentopo mcp                               serve the corpus as MCP tools on
-                                           stdio, read-only, until stdin closes
-    greentopo mcp install [--write] [--check]   register this binary with Claude Code
-                                           (user scope); without --write only
-                                           shows the command it would run
-    greentopo mcp uninstall [--write] [--check] remove that registration
-    greentopo repos                             what is answering from here: this
-                                           corpus, or every corpus one level
-                                           down when there is none above
+    greentopo <command> [options]
+
+COMMANDS
+    resolve <key> [--scope <scope>]       what is decided, and nothing else
+    relevant [--path <p>]…                which keys bear on what you are about
+        [--text <words>]                  to touch, ranked. ADVISORY: a
+        [--changed] [--top <n>]           suggestion, never a verdict; resolve
+                                          each key it names
+    keys [--names]                        the vocabulary: every key, where it
+                                          is answerable, where it is decided;
+                                          --names omits where it is decided
+    rules [--level <level>]               the adopted rules, one line each;
+        [--adopted-by <record>]           --level constraint|heuristic, --all
+        [--all] [--all-traits]            adds the inactive ones with the
+        [--index] [--governs code]        reason, --all-traits the ones about
+        [--full]                          traits this repository's areas do
+                                          not name, --index only their ids,
+                                          by prefix, --governs code only code
+                                          rules, --full each rule's text
+    traits [--summary]                    what this repository says it is, and
+        [--detect | --check]              what its tracked files suggest;
+                                          ADVISORY detection, never a filter
+    rule <id>                             one rule, with its translation, why
+    check                                 every invariant; the gate runs this
+    heads [--write | --check]             the projection
+    show <ADR-NNNN>                       derived status of one document
+    history <key> [--scope <scope>]       the chain: history, not authority
+    migrate <dir>                         report what converting a legacy
+                                          corpus needs
+    hook install [--check]                put the heads in front of an agent
+    hook uninstall [--write]              remove what install wrote: the marked
+        [--check]                         script and its settings entry;
+                                          without --write only says what it
+                                          would remove
+    pack [--write | --check]              this corpus's declarations, for
+                                          others to read
+    add <source>… [--dry-run]             vendor another repository's
+                                          declarations
+    add --check [--quiet]                 are the vendored packs still current;
+        [--budget <seconds>]              --quiet speaks only when one is not,
+                                          --budget kills a remote call late
+    mcp                                   serve the corpus as MCP tools on
+                                          stdio, read-only, until stdin closes
+    mcp install [--write] [--check]       register this binary with Claude Code
+                                          (user scope); without --write only
+                                          shows the command it would run
+    mcp uninstall [--write] [--check]     remove that registration
+    repos                                 what is answering from here: this
+                                          corpus, or every corpus one level
+                                          down when there is none above
 
 SOURCES
     github:owner/repo   forgejo:host/owner/repo   <git-url>   <path>
@@ -104,7 +111,8 @@ SOURCES
 
 OPTIONS
     --json        machine output on stdout, warnings suppressed
-    --path        relevant: a file or directory you are about to touch; repeatable
+    --path        relevant: a file or directory you are about to touch;
+                  repeatable
     --text        relevant: the task, in words
     --changed     relevant: add what git reports modified, staged or untracked
     --top         relevant: how many keys and rules to report (default 5)
@@ -117,16 +125,18 @@ OPTIONS
     --full        rules: each rule's body too, as `greentopo rule` prints it
     --summary     traits: the one line the session hook prints
     --detect      traits: propose `areas:` from the tracked files
-    --all-repos   resolve, keys, heads, history, rules: ask every corpus `greentopo repos`
-                  lists, and report them keyed by name (exit 0 clean · 1 a
-                  member contradicts or would not load · 3 none loaded)
+    --all-repos   resolve, keys, heads, history, rules: ask every corpus
+                  `greentopo repos` lists, and report them by name (exit
+                  0 clean · 1 a member contradicts or would not load ·
+                  3 none loaded)
     --as <name>   name one vendored pack (add only); it becomes the id prefix
     -C <dir>      run as if started in <dir>
     -h, --help    this
     -V, --version version
 
 EXIT
-    resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
+    resolve  0 active · 4 undecided · 5 contradiction · 6 retired ·
+             7 unknown
     relevant 0 always · 2 usage, including an undeclared --scope
     rule     0 found · 7 unknown
     traits   --check: 0 nothing to report · 1 findings · 3 could not inspect
@@ -139,7 +149,8 @@ EXIT
              1 not registered (install) or registered (uninstall) · 2 usage,
              including --write with --check · 3 --check, `claude` absent or
              could not answer
-    hook uninstall  --check: 0 nothing of greentopo's left · 1 something is
+    hook uninstall  --check: 0 when nothing of greentopo's is left, 1 when
+             something is left.
     repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 ";
 
@@ -348,17 +359,27 @@ fn main() -> ExitCode {
     ExitCode::from(code as u8)
 }
 
+/// Whether the pack vendored at `rel` is still keyed with the old name
+/// `aval:`. Packs are matched by the name their path gives them, never by
+/// position.
+fn has_old_key(l: &Loaded, rel: &str) -> bool {
+    let name = load::pack_name(rel);
+    l.packs.iter().any(|pack| {
+        pack.name == name
+            && pack
+                .warnings
+                .contains(&greentopo_core::pack::PackWarning::LegacyKey)
+    })
+}
+
 /// One notice per vendored pack still keyed with the old name `aval:`.
 fn legacy_key_notices(l: &Loaded) -> Vec<String> {
-    let rels = &l.graph.registry().packs;
-    l.packs
+    l.graph
+        .registry()
+        .packs
         .iter()
-        .zip(rels)
-        .filter(|(pack, _)| {
-            pack.warnings
-                .contains(&greentopo_core::pack::PackWarning::LegacyKey)
-        })
-        .map(|(_, rel)| add::legacy_key_notice(&l.root, rel))
+        .filter(|rel| has_old_key(l, rel))
+        .map(|rel| add::legacy_key_notice(&l.root, rel))
         .collect()
 }
 
@@ -1408,7 +1429,7 @@ fn cmd_add_check(args: &Args) -> i32 {
     let mut behind = 0;
     let mut edited = 0;
     let mut unknown = 0;
-    for (index, o) in add::origins(&l.root, packs).into_iter().enumerate() {
+    for o in add::origins(&l.root, packs) {
         let o = match o {
             Ok(o) => o,
             Err(e) => {
@@ -1419,17 +1440,16 @@ fn cmd_add_check(args: &Args) -> i32 {
                 continue;
             }
         };
-        let (standing, legacy_file) = add::standing(&l.root, &o);
-        // One notice per pack: a pack read through the old file name has said
-        // so, and its `aval:` key is the same fact.
+        let (standing, old_name) = add::standing(&l.root, &o);
         if !quiet {
-            if legacy_file {
-                eprintln!("warning: {}", add::legacy_file_notice(&o.source));
-            } else if l.packs.get(index).is_some_and(|pack| {
-                pack.warnings
-                    .contains(&greentopo_core::pack::PackWarning::LegacyKey)
-            }) {
-                eprintln!("warning: {}", add::legacy_key_notice(&l.root, &o.rel));
+            match old_name {
+                Some(add::OldName::File) => {
+                    eprintln!("warning: {}", add::legacy_file_notice(&o.source))
+                }
+                Some(add::OldName::Key) => {
+                    eprintln!("warning: {}", add::legacy_key_published_notice(&o.source))
+                }
+                None => {}
             }
         }
         match standing {
@@ -1570,13 +1590,15 @@ fn cmd_add(args: &Args) -> i32 {
         match add::resolve_one(spec, args.as_name.as_deref()) {
             Ok(v) => {
                 if !args.quiet {
-                    if v.legacy_file {
-                        eprintln!("warning: {}", add::legacy_file_notice(&v.source.label));
-                    } else if v.legacy_key {
-                        eprintln!(
+                    match v.old_name {
+                        Some(add::OldName::File) => {
+                            eprintln!("warning: {}", add::legacy_file_notice(&v.source.label))
+                        }
+                        Some(add::OldName::Key) => eprintln!(
                             "warning: {}",
                             add::legacy_key_published_notice(&v.source.label)
-                        );
+                        ),
+                        None => {}
                     }
                 }
                 vendored.push(v)

@@ -343,9 +343,9 @@ fn help_lists_the_new_commands() {
     let scratch_root = scratch("help");
     let got = greentopo(&scratch_root, &["--help"]);
     for line in [
-        "greentopo mcp install",
-        "greentopo mcp uninstall",
-        "greentopo hook uninstall",
+        "    mcp install ",
+        "    mcp uninstall ",
+        "    hook uninstall ",
     ] {
         assert!(got.out.contains(line), "{line}");
     }

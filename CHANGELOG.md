@@ -12,7 +12,9 @@
   (`GREENTOPO_*`), the published pack (`greentopo.pack`, key `greentopo:`),
   the hook (`.claude/hooks/greentopo-heads.sh`) and its cache
   (`~/.cache/greentopo`) all carry the new name. There is no `aval` alias.
-  Commands, flags, JSON and exit codes are otherwise unchanged.
+  Commands, flags, JSON and exit codes are otherwise unchanged. Workflow
+  pins still named `AVAL_VERSION` are not read by `greentopo hook install
+  --check` until the fleet sweep renames them.
 
 ### Added
 

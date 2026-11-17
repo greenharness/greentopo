@@ -1210,7 +1210,7 @@ fn a_hand_edited_pack_whose_source_moved_is_behind() {
     assert!(got.out.contains("behind"), "{}", got.out);
 }
 
-// --- the fallback read for packs written under the old name ----------------
+// The fallback read for packs written under the old name.
 
 /// The text of a pack with its generator key under the old name.
 fn aval_keyed(pack: &str) -> String {
@@ -1219,17 +1219,24 @@ fn aval_keyed(pack: &str) -> String {
     keyed
 }
 
-/// A producer that publishes `aval.pack` only, keyed `aval:`; with `both`, it
-/// also keeps its `greentopo.pack`.
-fn legacy_producer(name: &str, both: bool) -> PathBuf {
+/// A producer that publishes `aval.pack` only, keyed `aval:`.
+fn legacy_producer(name: &str) -> PathBuf {
     let p = producer(name);
     let current = fs::read_to_string(p.join("greentopo.pack")).unwrap();
     write(&p, "aval.pack", &aval_keyed(&current));
-    if !both {
-        fs::remove_file(p.join("greentopo.pack")).unwrap();
-    }
+    fs::remove_file(p.join("greentopo.pack")).unwrap();
     git(&p, &["add", "-A"]);
     git(&p, &["commit", "-qm", "publish under the old name"]);
+    p
+}
+
+/// A producer that publishes `aval.pack` and keeps its `greentopo.pack`.
+fn dual_producer(name: &str) -> PathBuf {
+    let p = producer(name);
+    let current = fs::read_to_string(p.join("greentopo.pack")).unwrap();
+    write(&p, "aval.pack", &aval_keyed(&current));
+    git(&p, &["add", "-A"]);
+    git(&p, &["commit", "-qm", "publish under both names"]);
     p
 }
 
@@ -1286,12 +1293,16 @@ fn check_json_holds_the_notice_in_warnings() {
     assert_eq!(got.code, 0, "{}", got.all());
     assert!(warning_lines(&got.err).is_empty(), "{}", got.err);
     let start = got.out.find("\"warnings\"").expect("a warnings array");
-    assert!(got.out[start..].contains("is keyed `aval:`"), "{}", got.out);
+    assert!(
+        got.out[start..].contains("uses the old `aval:` key"),
+        "{}",
+        got.out
+    );
 }
 
 #[test]
 fn add_vendors_a_source_that_publishes_only_the_old_name() {
-    let fleet = legacy_producer("legacy-file-fleet", false);
+    let fleet = legacy_producer("legacy-file-fleet");
     let c = consumer_pack_only("legacy-file-consumer");
 
     let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
@@ -1313,7 +1324,7 @@ fn add_vendors_a_source_that_publishes_only_the_old_name() {
 
 #[test]
 fn add_check_against_an_old_name_source_is_current_with_one_warning() {
-    let fleet = legacy_producer("legacy-check-fleet", false);
+    let fleet = legacy_producer("legacy-check-fleet");
     let c = consumer_pack_only("legacy-check-consumer");
     assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
 
@@ -1337,7 +1348,7 @@ fn add_check_against_an_old_name_source_is_current_with_one_warning() {
 
 #[test]
 fn a_source_publishing_both_names_is_read_from_the_new_one() {
-    let fleet = legacy_producer("legacy-both-fleet", true);
+    let fleet = dual_producer("legacy-both-fleet");
     let c = consumer_pack_only("legacy-both-consumer");
 
     let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
@@ -1346,4 +1357,26 @@ fn a_source_publishing_both_names_is_read_from_the_new_one() {
     let published = fs::read_to_string(fleet.join("greentopo.pack")).unwrap();
     let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
     assert!(vendored.ends_with(&published));
+}
+
+#[test]
+fn a_source_that_republishes_under_the_new_name_is_current_without_a_warning() {
+    let fleet = legacy_producer("legacy-moved-fleet");
+    let c = consumer_pack_only("legacy-moved-consumer");
+    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
+    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
+    assert!(vendored.contains("\naval:"), "{}", vendored);
+
+    let published = fs::read_to_string(fleet.join("aval.pack")).unwrap();
+    let renamed = published.replacen("\naval:", "\ngreentopo:", 1);
+    assert_ne!(renamed, published);
+    write(&fleet, "greentopo.pack", &renamed);
+    git(&fleet, &["add", "-A"]);
+    git(&fleet, &["commit", "-qm", "publish under the new name"]);
+
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.out.contains("current"), "{}", got.out);
+    assert!(got.out.contains("same declarations"), "{}", got.out);
+    assert!(warning_lines(&got.err).is_empty(), "{}", got.err);
 }

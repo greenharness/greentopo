@@ -364,9 +364,15 @@ pub fn fetch<'a>(
         ));
     }
     for file in files {
-        if let Ok(body) = git(&["show", &format!("FETCH_HEAD:{}", file)], Some(into)) {
-            return Ok((body, file));
+        let object = format!("FETCH_HEAD:{}", file);
+        // Absent only when the object is not there; any other failure of
+        // `show` is a real error and must not fall through to the next name.
+        if git(&["cat-file", "-e", &object], Some(into)).is_err() {
+            continue;
         }
+        let body = git(&["show", &object], Some(into))
+            .map_err(|e| format!("{}: cannot read {} at {}: {}", s.label, file, short(id), e))?;
+        return Ok((body, file));
     }
     Err(format!(
         "{}: has no {} at {}",

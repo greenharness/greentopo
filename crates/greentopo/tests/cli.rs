@@ -1299,3 +1299,15 @@ fn relevant_with_a_scope_flag_names_the_flag_scope_over_a_star_decision() {
     assert!(got.out.contains(r#""matched_scope":"*""#), "{}", got.out);
     assert!(got.out.contains(r#""scope_source":"flag""#), "{}", got.out);
 }
+
+#[test]
+fn no_help_line_is_wider_than_80_columns() {
+    let got = run(&std::env::temp_dir(), &["--help"]);
+    assert_eq!(got.code, 0, "{}", got.err);
+    let wide: Vec<&str> = got
+        .out
+        .lines()
+        .filter(|line| line.chars().count() > 80)
+        .collect();
+    assert!(wide.is_empty(), "lines wider than 80 columns: {:#?}", wide);
+}

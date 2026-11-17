@@ -1,9 +1,9 @@
 name: ADR
 
-# A separate workflow rather than a job in ci.yaml, deliberately. This job's
-# `GREENTOPO_VERSION` changes on every greentopo release, and the main CI has suites of
-# its own to pay for. Keeping the ADR check apart means a pin bump costs
-# seconds and queues nothing else.
+# A separate workflow rather than a job in ci.yaml, deliberately. The main CI
+# has suites of its own to pay for, and keeping the ADR check apart queues
+# nothing else. The job builds the checkout's own binary until the 2.0.0
+# follow-up restores the `GREENTOPO_VERSION` pin.
 on:
   push:
     branches: [main]
@@ -21,6 +21,7 @@ jobs:
   adr:
     name: architecture decisions resolve
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
