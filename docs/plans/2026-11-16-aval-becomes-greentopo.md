@@ -113,7 +113,7 @@ one fallback read below and an allowlist named in the PR.
 
 ## Phases
 
-### Phase 1 — transfer (the agent)
+### Phase 1 — transfer (the agent) — [x] done 2026-11-17
 
 Files: none in the tree; the live checkout's `.git/config` remote.
 
@@ -134,7 +134,7 @@ Files: none in the tree; the live checkout's `.git/config` remote.
    crates.io token's scope covers `greentopo` and `greentopo-core` (or is
    unscoped). Any failure stops here, because a partial publish cannot be undone.
 
-### Phase 2 — rename in the repository (worktree `aval-wt-greentopo`)
+### Phase 2 — rename in the repository (worktree `aval-wt-greentopo`) — [x] done 2026-11-17
 
 Sed with GNU `sed -E -i` on text files only, NUL-separated (`git grep -Ilz '' | xargs -0`; xargs here is BSD), excluding `.claude/hooks/`, `.claude/settings.json` (regenerated below), `CHANGELOG.md`,
 `docs/plans/`, `.adr/packs/` (re-vendored, not edited), in this order:
@@ -199,7 +199,7 @@ Run `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`,
 `scripts/npm-pack.sh` into a scratch dir (lists `@greenharness/greentopo` +
 six `@greenharness/greentopo-<platform>`). Commit, review (F4b), land, PR, merge on green.
 
-### Phase 3 — release 2.0.0
+### Phase 3 — release 2.0.0 — [ ] next
 
 Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo.rb`, `Formula/aval.rb`, `formula_renames.json`, and `decisions/docs/programmes/topo-spotter-rename/map.md`.
 
@@ -233,6 +233,29 @@ Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo
 | `cargo search greentopo`, `npm view @greenharness/greentopo version`, tap `Formula/greentopo.rb` | 2.0.0 |
 | `brew info fredericrous/tap/aval` | still 1.12.0 (rename map waits for the machine switch) |
 
+
+### Results, Phases 1–2 (observed before the push)
+
+| Check | Expected | Actual |
+|---|---|---|
+| `gh api repos/greenharness/greentopo -q .full_name` | `greenharness/greentopo` | `greenharness/greentopo` |
+| old-path `gh release download` for every fleet pin (1.7.1, 1.8.0, 1.9.0, 1.10.0, 1.11.0, 1.12.0), `git ls-remote`, raw `install.sh` | succeed via redirect | 6/6 downloaded; ls-remote `ba91061`; raw 200 |
+| `gh secret list` / `gh variable list -R greenharness/greentopo` | 3 secrets, `PUBLISH_*` | 3 secrets, 3 `PUBLISH_*` = true |
+| npm/crates pre-flight | names free, scope writable | `greentopo`, `greentopo-core` free on crates.io; `@greentopo` scope absent, so npm moved to `@greenharness` (ADR-0074, decisions#220); token write on `@greenharness` not testable locally, checked at the tag |
+| rename.sed before → after, per rule | each > 0 → 0 | 37/20/39/171/92/7/45/29/931 → 0; bare `aval` 931 → 7 (the skipped lines) |
+| `git grep -ni -e aval` (exclusions as above) | allowlist only | fallback code + tests, `aval-fleet`/`aval-agent`, `relais.toml` key, the adr.yaml comment naming 1.x |
+| `cargo test --workspace` | exit 0, fallback tests `ok` | 473 passed, 0 failed |
+| clippy `-D warnings`, `check-no-deps.sh`, `test_bump_tap.py`, `cargo fmt --check` | exit 0 | 0, 0, 0, 0 |
+| `greentopo check` here (vendored pack keyed `aval:`) | exit 0, one `warning:`, stdout unchanged | exit 0; stdout `74 decision records, no findings`; one `warning: … uses the old \`aval:\` key; run \`greentopo add github:fredericrous/decisions\`` |
+| `greentopo check --json` | `warnings` holds it | 1 entry |
+| `greentopo add --check` vs `github:fredericrous/decisions` (only `aval.pack`) | Current, one warning, stdout clean | `current decisions @ 0e655c0`; one `warning: … publishes aval.pack; run \`greentopo pack --write\` there` |
+| `add --check --quiet` | nothing on stdout | 0 bytes stdout, 0 bytes stderr |
+| `resolve --json` | shape unchanged | no `warnings` key, stderr empty |
+| `jq '.hooks.SessionStart' .claude/settings.json` | one `greentopo-heads.sh` entry | one entry; script marker `greentopo 2.0.0`; `hook install --check` exit 0 |
+| `greentopo mcp`, `tools/list` | ten `greentopo_*` | server `greentopo` 2.0.0, ten `greentopo_*` |
+| `scripts/npm-pack.sh 2.0.0` on stub archives | `@greenharness/greentopo` + six platforms | 7 package.json, root bin `greentopo`, six optionalDependencies |
+| `--help` width | ≤ 80 columns | widest 79 (test `no_help_line_is_wider_than_80_columns`) |
+
 ## After release
 
 - For 7 days after the transfer: count fleet `adr.yaml` runs that fail at the download step (`gh release download --repo fredericrous/aval`). Expected 0; if any fail and no fix lands within a day, transfer the repo back (Rollback).
@@ -245,6 +268,13 @@ Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo
 - Before the tag: close the PR. After: a 2.0.1 fix; tags are never moved.
   Published crates/npm can be yanked/deprecated only by the person's call.
 
+## Implementation review
+
+- implementation-review (opus): approve-with-changes → approve after 2 deltas; fixed banner, bool helper, false glob comment, results table, plan notes; deliberate: pre-existing stdout/banner/`&mut` violations only renamed by sed (follow-up); 101k+121k+129k, 151+28+17 s.
+- backend: approve; fixed fetch absent-vs-error (`cat-file -e`), sweep-path test, npm summary name; 84k+98k. platform: approve; fixed adr.yaml header, `timeout-minutes: 20`; 72k+75k.
+- lang:rust: approve; fixed one `Option<OldName>`, path pairing, public `LEGACY_KEY`, `#[non_exhaustive]`, unit tests (relais's new bool flags corrected by hand); 62k+79k.
+- unix: approve; deliberate: old `AVAL_VERSION` pins unread until the sweep, noted in CHANGELOG; 64k+80k. tui: approve; fixed 80-column help + test, shorter notice, `--as` kept in the notice; carried: register.rs help-name assertion weakened (low); 56k+74k+76k.
+
 ## Decision log
 
 - 2026-11-16: one fallback read for `aval:`-keyed packs and `aval.pack`
@@ -253,5 +283,9 @@ Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo
   since its `greengate.conf` pack pins (`github:fredericrous/adr-lint <sha>`)
   are read by every repo's gate.
 - 2026-11-16: version 2.0.0 — the binary and MCP tool names change.
+- 2026-11-17: npm moved to `@greenharness/greentopo(-<platform>)` — no `@greentopo` scope exists; the person chose `@greenharness` (ADR-0074, decisions#220). Plan delta reviewed by backend.
+- 2026-11-17: `scripts/rename.sed` carries rules the Phase 2 table lacks, found while running it: 3b also renames `aval_nope` and `path_with_aval`; 9b renames `\naval` inside string literals (the escape's `n` defeats `\b`); 9c renames the remaining `aval_` prefixes and `_aval_` infixes. Behaviour 1's CLI tests live in `tests/pack.rs`, not `tests/cli.rs`.
+- 2026-11-17: `aval hook uninstall --write` removed `.claude/settings.json` whole (it held only the hook); `greentopo hook install` recreated it.
+- 2026-11-17: the fallback read was built by relais (run-6606f1c4a321f-2e95) and its review fixes by relais (run-6606f6443b9a4-46ad); two hand corrections followed (bool flags, `--as` in the notice), recorded as relais feedback.
 
 <!-- panel: repos=aval,decisions adds=contract reviewers=backend,lang:rust,architect,po,tui,unix body-sha=009f48e83526 -->
