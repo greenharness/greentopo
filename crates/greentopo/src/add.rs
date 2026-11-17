@@ -72,31 +72,34 @@ pub enum OldName {
 }
 
 impl OldName {
-    /// The one-notice-per-pack rule: the file name wins over the key.
-    pub fn of(old_file: bool, old_key: bool) -> Option<OldName> {
-        if old_file {
-            Some(OldName::File)
-        } else if old_key {
-            Some(OldName::Key)
-        } else {
-            None
-        }
+    /// `Key` when the parsed pack carries the old generator key.
+    pub fn key_of(parsed: &pack::Pack) -> Option<OldName> {
+        parsed
+            .warnings
+            .contains(&pack::PackWarning::LegacyKey)
+            .then_some(OldName::Key)
     }
 }
 
-/// The old name a just-fetched pack still goes by: the file it was published
-/// as, or the generator key it carries.
-fn published_old_name(o: &Origin, published: &str, old_file: bool) -> Option<OldName> {
-    let old_key = pack::parse(&o.rel, &o.name, published)
-        .is_ok_and(|parsed| parsed.warnings.contains(&pack::PackWarning::LegacyKey));
-    OldName::of(old_file, old_key)
+/// The old name a just-fetched pack still goes by. The one-notice-per-pack
+/// rule: the file it was published as wins over the generator key it carries.
+fn published_old_name(o: &Origin, published: &str, from_file: Option<OldName>) -> Option<OldName> {
+    from_file.or_else(|| {
+        pack::parse(&o.rel, &o.name, published)
+            .ok()
+            .and_then(|parsed| OldName::key_of(&parsed))
+    })
 }
 
-/// Fetch the pack a source publishes, trying the current name first, and say
-/// whether it answered under the old file name.
-fn fetch_published(source: &Source, id: &str, into: &Path) -> Result<(String, bool), String> {
+/// Fetch the pack a source publishes, trying the current name first; `File`
+/// when it answered under the old file name.
+fn fetch_published(
+    source: &Source,
+    id: &str,
+    into: &Path,
+) -> Result<(String, Option<OldName>), String> {
     let (body, file) = fetch::fetch(source, id, into, &PUBLISHED_AS)?;
-    Ok((body, file == pack::LEGACY_FILE))
+    Ok((body, (file == pack::LEGACY_FILE).then_some(OldName::File)))
 }
 
 /// The names a source may publish its pack under, in the order they are tried.
@@ -204,10 +207,7 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
         rel,
         records: parsed.adrs.len(),
         keys: parsed.keys.iter().map(|k| k.name.clone()).collect(),
-        old_name: OldName::of(
-            old_file,
-            parsed.warnings.contains(&pack::PackWarning::LegacyKey),
-        ),
+        old_name: old_file.or_else(|| OldName::key_of(&parsed)),
         source,
         id,
         body,
