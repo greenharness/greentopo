@@ -6,9 +6,9 @@ release tarballs and lays the trees out.
 
 ```
 npm/
-  aval/                 the package people depend on
+  greentopo/                 the package people depend on
     package.json.in      optionalDependencies on all six platform packages
-    bin/aval.js         resolves the platform binary and execs it
+    bin/greentopo.js         resolves the platform binary and execs it
     README.md
   platform/
     package.json.in      one template, six substitutions
@@ -21,7 +21,7 @@ tarball. It is simpler to publish and worse to depend on:
 
 - `npm ci --ignore-scripts` is a normal hardening choice and a security default
   in several CI images. A postinstall install silently produces a package with
-  no binary in it, and the failure surfaces later as "aval: not found" from a
+  no binary in it, and the failure surfaces later as "greentopo: not found" from a
   git hook.
 - It needs the network at install time, so a GitHub outage becomes a broken
   `npm install` for everyone.
@@ -31,14 +31,14 @@ tarball. It is simpler to publish and worse to depend on:
 `os` / `cpu` / `libc` on each platform package let npm and pnpm resolve exactly
 one of the six and skip the rest, with no code running at install time at all.
 
-## Why `bin/aval.js` is not on the hook path
+## Why `bin/greentopo.js` is not on the hook path
 
 The `bin` a package manager links has to live inside the package, so it is a JS
 file, and node's start-up is ~30ms — on a tool whose whole posture is that it
 runs on every commit.
 
-It never pays that. `aval init` bakes `current_exe()`, which is the **native**
+It never pays that. `greentopo init` bakes `current_exe()`, which is the **native**
 binary inside the platform package, straight into `.git/hooks`. The JS wrapper
 runs exactly once, during `prepare`; every commit afterwards execs the binary
 directly. `init_writes_the_four_shims_and_bakes_the_running_binary` in
-`crates/aval/tests/init.rs` is what keeps that true.
+`crates/greentopo/tests/init.rs` is what keeps that true.

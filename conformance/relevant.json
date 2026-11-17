@@ -1,6 +1,6 @@
 {
   "description": [
-    "Conformance battery for `aval relevant`. Each case names a corpus under corpora/,",
+    "Conformance battery for `greentopo relevant`. Each case names a corpus under corpora/,",
     "a query, and what the ranking must say. The harness rules are `resolve.json`'s:",
     "`name` is the test name, an unknown field in `expected` throws rather than being",
     "skipped, and `min_cases` keeps an empty or mis-parsed file from passing green.",

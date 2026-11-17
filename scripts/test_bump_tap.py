@@ -29,7 +29,7 @@ def sha_for(i: int) -> str:
 
 def sums(version: str, targets=TARGETS, extra: str = "") -> str:
     lines = [
-        f"{sha_for(i)}  aval-{version}-{t}.tar.gz" for i, t in enumerate(targets, 1)
+        f"{sha_for(i)}  greentopo-{version}-{t}.tar.gz" for i, t in enumerate(targets, 1)
     ]
     if extra:
         lines.append(extra)
@@ -38,9 +38,9 @@ def sums(version: str, targets=TARGETS, extra: str = "") -> str:
 
 def formula(version: str, targets=TARGETS) -> str:
     body = [
-        "class Aval < Formula",
+        "class Greentopo < Formula",
         '  desc "Ask what the current architecture decision is"',
-        '  homepage "https://github.com/fredericrous/aval"',
+        '  homepage "https://github.com/greenharness/greentopo"',
         f'  version "{version}"',
         '  license "MIT"',
         "",
@@ -48,8 +48,8 @@ def formula(version: str, targets=TARGETS) -> str:
     for i, t in enumerate(targets, 1):
         body += [
             "  on_macos do",
-            f'    url "https://github.com/fredericrous/aval/releases/download/'
-            f'v{version}/aval-{version}-{t}.tar.gz"',
+            f'    url "https://github.com/greenharness/greentopo/releases/download/'
+            f'v{version}/greentopo-{version}-{t}.tar.gz"',
             f'    sha256 "{sha_for(100 + i)}"',
             "  end",
         ]
@@ -59,7 +59,7 @@ def formula(version: str, targets=TARGETS) -> str:
 
 def run(tmp_path, version, sums_text, formula_text):
     s = tmp_path / "SHA256SUMS"
-    f = tmp_path / "aval.rb"
+    f = tmp_path / "greentopo.rb"
     s.write_text(sums_text)
     f.write_text(formula_text)
     proc = subprocess.run(
@@ -77,7 +77,7 @@ def test_rewrites_the_version_and_every_pair(tmp_path):
     assert 'version "0.2.0"' in out
     assert "0.1.0" not in out, "a stale version survived the rewrite"
     for i, t in enumerate(TARGETS, 1):
-        assert f"aval-0.2.0-{t}.tar.gz" in out
+        assert f"greentopo-0.2.0-{t}.tar.gz" in out
         assert sha_for(i) in out, f"{t} kept its old checksum"
 
 
@@ -130,4 +130,4 @@ def test_refuses_a_formula_that_does_not_carry_four_pairs(tmp_path):
 def test_refuses_a_checksum_file_with_nothing_it_recognises(tmp_path):
     proc, _ = run(tmp_path, "0.2.0", "deadbeef  something-else.tar.gz\n", formula("0.1.0"))
     assert proc.returncode != 0
-    assert "no aval checksums parsed" in proc.stderr
+    assert "no greentopo checksums parsed" in proc.stderr

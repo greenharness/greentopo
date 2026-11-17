@@ -1,12 +1,12 @@
 # Sharing one decision across repositories
 
-A decision made once should be readable everywhere it applies. `aval pack`
-publishes a corpus's declarations; `aval add` vendors them into another
+A decision made once should be readable everywhere it applies. `greentopo pack`
+publishes a corpus's declarations; `greentopo add` vendors them into another
 repository, which then resolves them as if they were its own.
 
 ```console
-$ aval add github:acme/decisions
-$ aval resolve stack.sql-layer --scope effect-stack
+$ greentopo add github:acme/decisions
+$ greentopo resolve stack.sql-layer --scope effect-stack
 active   decisions:ADR-0002   @effect/sql
   scope: effect-stack
   vendored: from the `decisions` pack; change it there, not here
@@ -18,17 +18,17 @@ gets recorded. `--as <name>` names the pack, which becomes the prefix on its
 record ids.
 
 A consumer needs no corpus of its own — a registry with `packs:` and no `dir:`
-is enough, and in a repository with no registry at all `aval add` writes a
+is enough, and in a repository with no registry at all `greentopo add` writes a
 starter one. Transport is git and only git, so a private repository and a forge
 behind a client certificate both work with your own credentials and no token
 issued to this tool.
 
 The vendored file is `.adr/packs/<name>.pack`, with the extension the producer's
 own published file carries and no formatter claims. A `.adr/packs/<name>.yaml`
-written before 1.3 still loads, and the next `aval add` moves it and rewrites
+written before 1.3 still loads, and the next `greentopo add` moves it and rewrites
 its registry line. What makes it still the published pack is what it
 *declares*, not its bytes — so a formatter that reformatted it has changed
-nothing, while a hand-edited decision is reported by `aval add --check` as
+nothing, while a hand-edited decision is reported by `greentopo add --check` as
 `edited`.
 
 ## A consumer cannot quietly disagree
@@ -55,7 +55,7 @@ is refused — the reviewer and the model must see the same bytes.
 A pack is **behind** when its revision names a commit that publishes different
 declarations. A source that moved without changing what the pack declares (a
 plan document, say) is still `current`. Re-adding a behind pack shows the diff
-before it overwrites an edit, so nothing is lost by running `aval add`.
+before it overwrites an edit, so nothing is lost by running `greentopo add`.
 
 A pack goes stale silently otherwise, so there are two ways to be told. The
 session hook asks (see [in front of an agent](agents.md#vendored-packs-that-fell-behind)).
@@ -69,23 +69,23 @@ private consumer's runner with a deploy key, not from a public one's without:
     runs-on: ubuntu-latest
     continue-on-error: true
     env:
-      AVAL_VERSION: 1.8.0
+      GREENTOPO_VERSION: 1.8.0
     steps:
       - uses: actions/checkout@v4
       - uses: webfactory/ssh-agent@v0.9.0   # or however the runner reaches the source
         with:
           ssh-private-key: ${{ secrets.DECISIONS_READ_KEY }}
       - run: |
-          curl -fsSL https://raw.githubusercontent.com/fredericrous/aval/main/install/install.sh | sh
+          curl -fsSL https://raw.githubusercontent.com/greenharness/greentopo/main/install/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: |
-          if ! aval add --check --quiet --budget 30 > packs.txt; then
+          if ! greentopo add --check --quiet --budget 30 > packs.txt; then
             cat packs.txt
-            echo "::warning::vendored decisions are behind or edited — run aval add"
+            echo "::warning::vendored decisions are behind or edited — run greentopo add"
           fi
 ```
 
 Non-blocking for the same reason a dependency advisory is: a decision that
 changed upstream is information about the fleet, not a defect in the change
-under review. The `AVAL_VERSION:` line is the pin `aval hook install` reads to
-tell you when CI runs a different aval than you do.
+under review. The `GREENTOPO_VERSION:` line is the pin `greentopo hook install` reads to
+tell you when CI runs a different greentopo than you do.

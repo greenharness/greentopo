@@ -1,11 +1,11 @@
 #!/bin/sh
-# Install the aval binary. Nothing else.
+# Install the greentopo binary. Nothing else.
 #
-#   curl -fsSL https://raw.githubusercontent.com/fredericrous/aval/main/install/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/greenharness/greentopo/main/install/install.sh | sh
 #
 # It downloads a checksum-verified binary, puts it on your PATH, and tells you
 # what to run next. Nothing else: it gates no repository and edits no config.
-# That restraint is the point. `aval` is a gate, and an installer that armed
+# That restraint is the point. `greentopo` is a gate, and an installer that armed
 # one on first contact with your machine would contradict the guarantee on its
 # way in.
 #
@@ -13,11 +13,11 @@
 # does, including a minimal CI image with no bash.
 set -eu
 
-REPO="fredericrous/aval"
+REPO="greenharness/greentopo"
 # `$HOME/.local/bin` by default: the conventional per-user location, already on
 # PATH in most shells, and writable without sudo.
-BIN_DIR="${AVAL_BIN_DIR:-$HOME/.local/bin}"
-VERSION="${AVAL_VERSION:-latest}"
+BIN_DIR="${GREENTOPO_BIN_DIR:-$HOME/.local/bin}"
+VERSION="${GREENTOPO_VERSION:-latest}"
 
 RED='\033[31m'; GREEN='\033[32m'; YELLOW='\033[33m'; OFF='\033[0m'
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then RED=''; GREEN=''; YELLOW=''; OFF=''; fi
@@ -54,7 +54,7 @@ target() {
             if ldd --version 2>&1 | grep -qi musl; then libc=musl; else libc=gnu; fi
             case "$arch" in
                 x86_64|amd64)  echo "x86_64-unknown-linux-$libc" ;;
-                aarch64|arm64) [ "$libc" = "musl" ] && die "no aarch64 musl build yet — build from source with cargo install aval"
+                aarch64|arm64) [ "$libc" = "musl" ] && die "no aarch64 musl build yet — build from source with cargo install greentopo"
                                echo "aarch64-unknown-linux-gnu" ;;
                 *) die "unsupported architecture: $arch" ;;
             esac
@@ -88,16 +88,16 @@ resolve_version() {
     # handing you a tarball full of HTML.
     tag=$(fetch "https://api.github.com/repos/$REPO/releases/latest" \
         | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -n 1)
-    [ -n "$tag" ] || die "could not determine the latest release (rate limited? set AVAL_VERSION=vX.Y.Z)"
+    [ -n "$tag" ] || die "could not determine the latest release (rate limited? set GREENTOPO_VERSION=vX.Y.Z)"
     echo "${tag#v}"
 }
 
 main() {
-    printf '\n  aval installer\n\n'
+    printf '\n  greentopo installer\n\n'
 
     t=$(target)
     v=$(resolve_version)
-    name="aval-${v}-${t}"
+    name="greentopo-${v}-${t}"
     base="https://github.com/$REPO/releases/download/v${v}"
 
     say "version:  $v"
@@ -143,35 +143,35 @@ main() {
     # Whether this is an upgrade decides what to say at the end: the
     # first-install steps are wrong advice the second time.
     upgrading=0
-    [ -x "$BIN_DIR/aval" ] && upgrading=1
+    [ -x "$BIN_DIR/greentopo" ] && upgrading=1
     mkdir -p "$BIN_DIR"
     # Write to a temporary name and rename over the destination: replacing a
     # RUNNING binary in place fails on some platforms, and rename is atomic, so
-    # a half-copied aval never exists.
-    [ -f "$tmp/$name/aval" ] || die "$name archive holds no aval binary"
-    cp "$tmp/$name/aval" "$BIN_DIR/.aval.new"
-    chmod 755 "$BIN_DIR/.aval.new"
-    mv "$BIN_DIR/.aval.new" "$BIN_DIR/aval"
-    ok "installed $BIN_DIR/aval"
+    # a half-copied greentopo never exists.
+    [ -f "$tmp/$name/greentopo" ] || die "$name archive holds no greentopo binary"
+    cp "$tmp/$name/greentopo" "$BIN_DIR/.greentopo.new"
+    chmod 755 "$BIN_DIR/.greentopo.new"
+    mv "$BIN_DIR/.greentopo.new" "$BIN_DIR/greentopo"
+    ok "installed $BIN_DIR/greentopo"
 
     printf '\n'
     case ":$PATH:" in
         *":$BIN_DIR:"*) ;;
-        *) warn "$BIN_DIR is not on your PATH — add it, or a gate that calls \`aval\` by name will report it as missing" ;;
+        *) warn "$BIN_DIR is not on your PATH — add it, or a gate that calls \`greentopo\` by name will report it as missing" ;;
     esac
 
     if [ "$upgrading" -eq 1 ]; then
         printf '  Upgraded. Nothing per repository needs redoing: a gate declared\n'
         printf '  in greengate.conf calls this binary by name and picks up the new one.\n\n'
-        printf '  If the decision format changed, aval check will say so.\n\n'
+        printf '  If the decision format changed, greentopo check will say so.\n\n'
         return
     fi
     printf '  Nothing is gated yet, on purpose. In a repository with decisions:\n\n'
-    printf '    aval check                         # every invariant\n'
-    printf '    aval resolve <key>                 # what is decided now\n'
-    printf '    aval heads --write                 # regenerate the projection\n\n'
+    printf '    greentopo check                         # every invariant\n'
+    printf '    greentopo resolve <key>                 # what is decided now\n'
+    printf '    greentopo heads --write                 # regenerate the projection\n\n'
     printf '  To gate it, add one line to that repository'"'"'s greengate.conf:\n\n'
-    printf '    pre-commit    adr   *+.adr.yaml   block   aval check\n\n'
+    printf '    pre-commit    adr   *+.adr.yaml   block   greentopo check\n\n'
 }
 
 main "$@"

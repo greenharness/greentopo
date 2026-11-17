@@ -29,13 +29,13 @@ per-rule supersession edges, because the graph already tracks the record — a
 rule whose meaning changes gets a new id.
 
 ```console
-$ aval rules --level heuristic
+$ greentopo rules --level heuristic
 heuristic  architecture.business-rules                    An entity embodies critical business rules and data …
 heuristic  architecture.draw-boundaries-deliberately      Boundaries are drawn where the axis of change lies, …
 …
-aval: hidden by traits (cli): 0 constraint(s), 4 heuristic(s); `aval rules --all-traits` lists them
+greentopo: hidden by traits (cli): 0 constraint(s), 4 heuristic(s); `greentopo rules --all-traits` lists them
 
-$ aval rule names.reveal-intent
+$ greentopo rule names.reveal-intent
 names.reveal-intent   constraint
   adopts: decisions:ADR-0011   (active)
   source: Clean Code (Robert C. Martin, 2008)
@@ -46,12 +46,12 @@ A `constraint` is followed and a review blocks on it; the session hook names
 every active one, by id, grouped by prefix:
 
 ```console
-$ aval rules --level constraint --index
+$ greentopo rules --level constraint --index
   functions: do-one-thing, small
   names: no-noise, reveal-intent
 ```
 
-`aval rule <id>` gives one rule's text. A `heuristic` is followed unless a
+`greentopo rule <id>` gives one rule's text. A `heuristic` is followed unless a
 reviewer argues why not, in that place, and is fetched on demand. Precedence,
 which the hook also prints: the decision at the scope asked, then the
 default-scope decision, then these rules, then the book a rule cites — as
@@ -66,11 +66,11 @@ adds the inactive ones, each with the reason it is inactive. `--index` needs
 
 A rule file whose rules govern how code is written says so with `governs: code`
 in its frontmatter (the only value; absent means not code, any other value is
-an error). It travels in the pack. `aval rules --governs code` lists only those
-rules, after the trait filter. `aval rules --full` prints each rule as `aval
+an error). It travels in the pack. `greentopo rules --governs code` lists only those
+rules, after the trait filter. `greentopo rules --full` prints each rule as `greentopo
 rule <id>` does, separated by a blank line and a `---` line; with `--json` every
 rule carries `governs` (string or null) and `--full` adds `body`. `--full`
-refuses `--index`. The MCP `aval_rules` tool takes `governs` and `full`.
+refuses `--index`. The MCP `greentopo_rules` tool takes `governs` and `full`.
 
 ## Traits: rules that only apply where the thing exists
 
@@ -93,25 +93,25 @@ disclaims:
   "tools/**": [cli]
 ```
 
-With `areas` declared, `aval rules` and the hook list only rules that apply to
+With `areas` declared, `greentopo rules` and the hook list only rules that apply to
 the traits declared, and **say what they hid** — on stderr, in `omitted` on
 every `--json` and tool payload, and in one hook line printed even when nothing
-is hidden. A hidden rule is still active: `aval rule <id>` explains it and
+is hidden. A hidden rule is still active: `greentopo rule <id>` explains it and
 `--all-traits` lists it. Without `areas`, nothing changes.
 
-`aval traits --detect` proposes areas from the files git tracks, and `aval
+`greentopo traits --detect` proposes areas from the files git tracks, and `greentopo
 traits --check` reports what the declaration misses, locally per package, plus
 any glob that matches nothing. Detection is advisory and leans toward
 reporting: a false positive costs one `disclaims` line, while a miss would hide
-a constraint. It never filters anything on its own. `aval traits --summary` is
+a constraint. It never filters anything on its own. `greentopo traits --summary` is
 the one line the session hook prints:
 
 ```console
-$ aval traits --summary
-traits here: cli — hidden by traits: 5 constraint(s), 4 heuristic(s) (aval rules --all-traits)
+$ greentopo traits --summary
+traits here: cli — hidden by traits: 5 constraint(s), 4 heuristic(s) (greentopo rules --all-traits)
 ```
 
 Traits are applicability, never resolution: nothing about them changes a
-verdict, whether a rule is active, or what `aval check` reports. §2.5 of
-[`SEMANTICS.md`](https://github.com/fredericrous/aval/blob/main/SEMANTICS.md)
+verdict, whether a rule is active, or what `greentopo check` reports. §2.5 of
+[`SEMANTICS.md`](https://github.com/greenharness/greentopo/blob/main/SEMANTICS.md)
 is the full definition.

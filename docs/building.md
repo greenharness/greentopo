@@ -6,7 +6,7 @@ cargo build --release
 ```
 
 No external dependencies, by design and enforced in CI by
-`scripts/check-no-deps.sh`. `aval` runs on the pre-commit path, so it pulls in
+`scripts/check-no-deps.sh`. `greentopo` runs on the pre-commit path, so it pulls in
 nothing.
 
 The toolchain is pinned in `rust-toolchain.toml`, and `make check` uses rustup's
@@ -15,8 +15,8 @@ pin and would lint with a different clippy than CI. `make msrv` builds with the
 `rust-version` that `Cargo.toml` declares; it says SKIPPED, loudly, when that
 toolchain is not installed.
 
-The workspace is two crates: `aval-core` (the model, the parser, the graph and
-the text index; it touches neither the filesystem nor a process) and `aval`
+The workspace is two crates: `greentopo-core` (the model, the parser, the graph and
+the text index; it touches neither the filesystem nor a process) and `greentopo`
 (the CLI, loading and git, the ranking, the hook and the MCP server). `conformance/` holds the battery that pins
 resolution, ranking and trait matching byte for byte; a change there is the
 signal that behaviour moved.
@@ -33,8 +33,8 @@ mdbook serve docs       # the same, live, on localhost:3000
 ```
 
 The normative specification,
-[`SEMANTICS.md`](https://github.com/fredericrous/aval/blob/main/SEMANTICS.md),
+[`SEMANTICS.md`](https://github.com/greenharness/greentopo/blob/main/SEMANTICS.md),
 and the
-[`CHANGELOG.md`](https://github.com/fredericrous/aval/blob/main/CHANGELOG.md)
+[`CHANGELOG.md`](https://github.com/greenharness/greentopo/blob/main/CHANGELOG.md)
 stay at the repository root: the release archives ship the first, and the
 release notes are cut from the second.

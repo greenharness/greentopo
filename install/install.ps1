@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Install the aval binary on Windows. Nothing else.
+    Install the greentopo binary on Windows. Nothing else.
 
 .DESCRIPTION
-    irm https://raw.githubusercontent.com/fredericrous/aval/main/install/install.ps1 | iex
+    irm https://raw.githubusercontent.com/greenharness/greentopo/main/install/install.ps1 | iex
 
     The counterpart to install/install.sh, which is POSIX sh and therefore
     reaches Windows only through Git Bash. This one runs in the PowerShell
@@ -22,19 +22,19 @@
 .PARAMETER BinDir
     Where to put the executables. Defaults to $HOME\.local\bin, and not
     arbitrarily: that is candidate 3 in the shim's own resolution order, and
-    the shim tries both `aval` and `aval.exe` there — so a binary in
+    the shim tries both `greentopo` and `greentopo.exe` there — so a binary in
     that directory is found even by a shim whose path was never baked.
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = $env:AVAL_VERSION,
-    [string]$BinDir  = $env:AVAL_BIN_DIR
+    [string]$Version = $env:GREENTOPO_VERSION,
+    [string]$BinDir  = $env:GREENTOPO_BIN_DIR
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Repo = 'fredericrous/aval'
+$Repo = 'greenharness/greentopo'
 if (-not $BinDir)  { $BinDir  = Join-Path $HOME '.local\bin' }
 if (-not $Version) { $Version = 'latest' }
 
@@ -53,7 +53,7 @@ try {
 }
 
 Write-Host ''
-Write-Host '  aval installer'
+Write-Host '  greentopo installer'
 Write-Host ''
 
 # Only x86_64 is published today. Windows on ARM runs x64 binaries through
@@ -68,7 +68,7 @@ if ($arch -eq 'ARM64') {
 if ($Version -eq 'latest') {
     try {
         $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" `
-            -Headers @{ 'User-Agent' = 'aval-installer' }
+            -Headers @{ 'User-Agent' = 'greentopo-installer' }
         $Version = $release.tag_name
     } catch {
         Fail "could not determine the latest release (rate limited? pass -Version v1.2.3): $_"
@@ -76,7 +76,7 @@ if ($Version -eq 'latest') {
 }
 $v = $Version -replace '^v', ''
 
-$name = "aval-$v-$target"
+$name = "greentopo-$v-$target"
 $base = "https://github.com/$Repo/releases/download/v$v"
 
 Write-Host "  version:  $v"
@@ -84,7 +84,7 @@ Write-Host "  platform: $target"
 Write-Host "  into:     $BinDir"
 Write-Host ''
 
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("aval-" + [guid]::NewGuid().ToString('N'))
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("greentopo-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
 try {
@@ -124,23 +124,22 @@ try {
     $src = Join-Path $tmp $name
     # Whether this is an upgrade decides what to say at the end: the
     # first-install steps are wrong advice the second time.
-    $upgrading = Test-Path (Join-Path $BinDir 'aval.exe')
+    $upgrading = Test-Path (Join-Path $BinDir 'greentopo.exe')
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-    foreach ($exe in @('aval.exe', 'aval-fleet.exe')) {
-        $from = Join-Path $src $exe
-        if (Test-Path $from) {
-            $to = Join-Path $BinDir $exe
-            # Copy beside the destination and move it into place: replacing a
-            # RUNNING executable in place fails on Windows with a sharing
-            # violation, and a move is atomic, so a half-copied aval.exe
-            # never exists.
-            $staged = "$to.new"
-            Copy-Item -Path $from -Destination $staged -Force
-            Move-Item -Path $staged -Destination $to -Force
-            Write-Ok "installed $to"
-        }
+    $from = Join-Path $src 'greentopo.exe'
+    if (-not (Test-Path $from)) {
+        Fail "the archive holds no greentopo.exe - refusing to install"
     }
+    $to = Join-Path $BinDir 'greentopo.exe'
+    # Copy beside the destination and move it into place: replacing a
+    # RUNNING executable in place fails on Windows with a sharing
+    # violation, and a move is atomic, so a half-copied greentopo.exe
+    # never exists.
+    $staged = "$to.new"
+    Copy-Item -Path $from -Destination $staged -Force
+    Move-Item -Path $staged -Destination $to -Force
+    Write-Ok "installed $to"
 } finally {
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -165,14 +164,14 @@ if ($upgrading) {
     Write-Host '    aval-fleet fix --root $HOME\source                       # dry run'
     Write-Host '    aval-fleet fix --root $HOME\source --apply --agents-md'
     Write-Host ''
-    Write-Host '  or, in one repository:  aval install; aval agents-md'
+    Write-Host '  or, in one repository:  greentopo install; greentopo agents-md'
     Write-Host ''
 } else {
     Write-Host '  Nothing is enabled yet, on purpose. To turn the hooks on:'
     Write-Host ''
-    Write-Host '    cd <your-repo>; aval install     # this repository only'
-    Write-Host '    aval list                        # what would run here'
-    Write-Host '    aval uninstall                   # and back out again'
+    Write-Host '    cd <your-repo>; greentopo install     # this repository only'
+    Write-Host '    greentopo list                        # what would run here'
+    Write-Host '    greentopo uninstall                   # and back out again'
     Write-Host ''
     Write-Host '  Across many repositories at once:  aval-fleet install --root $HOME\source'
     Write-Host ''

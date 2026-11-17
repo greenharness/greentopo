@@ -54,7 +54,7 @@ that is where an agent left to its own judgment does damage.
 | 7 | `unknown` | no such key or scope, or a key not decided on that axis |
 
 ```console
-$ aval resolve api.gateway
+$ greentopo resolve api.gateway
 contradiction   2 heads for api.gateway; the corpus disagrees with itself
   ADR-0001  introduced in 8d68d23f
   ADR-0002  introduced in 7941cf9b
@@ -67,7 +67,7 @@ Codes `1`, `2` and `3` mean the tool failed, was misused, or could not read the
 corpus. They never overlap a verdict, so "I could not look" is never mistaken
 for "I looked and found nothing". Every other command's contract is in
 [the command reference](commands.md#exit-codes), and all of them in §14 of
-[`SEMANTICS.md`](https://github.com/fredericrous/aval/blob/main/SEMANTICS.md#14-exit-codes).
+[`SEMANTICS.md`](https://github.com/greenharness/greentopo/blob/main/SEMANTICS.md#14-exit-codes).
 
 ## Scopes
 
@@ -93,8 +93,8 @@ something else.
 
 The verdicts, their exit codes, the note strings, the `--json` field names and
 the frontmatter dialect are stable since 1.0; §15 of
-[`SEMANTICS.md`](https://github.com/fredericrous/aval/blob/main/SEMANTICS.md#15-versioning)
+[`SEMANTICS.md`](https://github.com/greenharness/greentopo/blob/main/SEMANTICS.md#15-versioning)
 says exactly what that covers, and what it deliberately does not.
-[`SEMANTICS.md`](https://github.com/fredericrous/aval/blob/main/SEMANTICS.md)
+[`SEMANTICS.md`](https://github.com/greenharness/greentopo/blob/main/SEMANTICS.md)
 is normative and is the place to start if you intend to write records against
 this.

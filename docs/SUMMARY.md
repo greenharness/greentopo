@@ -1,8 +1,8 @@
 # Summary
 
-[aval](index.md)
+[greentopo](index.md)
 
-# Using aval
+# Using greentopo
 
 - [Installing and gating](install.md)
 - [The model](concepts.md)

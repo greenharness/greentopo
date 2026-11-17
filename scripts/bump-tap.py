@@ -14,7 +14,7 @@ Idempotent on purpose: re-run against a formula already at the version it
 produces byte-identical output, so the workflow's "nothing to commit" path
 is how a resumed release run no-ops.
 
-Usage: bump-tap.py <version> <SHA256SUMS> <Formula/aval.rb>
+Usage: bump-tap.py <version> <SHA256SUMS> <Formula/greentopo.rb>
 """
 
 import pathlib
@@ -32,14 +32,14 @@ def main() -> None:
         if len(parts) != 2:
             continue
         sha, name = parts
-        m = re.fullmatch(r"aval-([0-9.]+)-(.+?)\.(?:tar\.gz|zip)", name)
+        m = re.fullmatch(r"greentopo-([0-9.]+)-(.+?)\.(?:tar\.gz|zip)", name)
         if not m:
             continue
         assert m.group(1) == version, (
             f"SHA256SUMS is for {m.group(1)}, not {version} — wrong release?"
         )
         sums[m.group(2)] = (sha, name)
-    assert sums, f"no aval checksums parsed from {sums_path}"
+    assert sums, f"no greentopo checksums parsed from {sums_path}"
 
     formula = pathlib.Path(formula_path)
     text = formula.read_text()
@@ -55,20 +55,20 @@ def main() -> None:
         )
         sha, name = sums[target]
         return (
-            f'url "https://github.com/fredericrous/aval/releases/'
+            f'url "https://github.com/greenharness/greentopo/releases/'
             f'download/v{version}/{name}"'
             f'{m.group("mid")}sha256 "{sha}"'
         )
 
     pair = re.compile(
-        r'url "https://github\.com/fredericrous/aval/releases/'
-        r'download/v[0-9.]+/aval-[0-9.]+-(?P<target>[a-z0-9_-]+)\.tar\.gz"'
+        r'url "https://github\.com/greenharness/greentopo/releases/'
+        r'download/v[0-9.]+/greentopo-[0-9.]+-(?P<target>[a-z0-9_-]+)\.tar\.gz"'
         r'(?P<mid>\s+)sha256 "[0-9a-f]{64}"'
     )
     text, n = pair.subn(rewrite, text)
     assert n == 4, f"expected 4 url/sha pairs in the formula, rewrote {n}"
 
-    stale = set(re.findall(r"aval-([0-9.]+)-", text)) - {version}
+    stale = set(re.findall(r"greentopo-([0-9.]+)-", text)) - {version}
     assert not stale, f"stale release versions survived the rewrite: {stale}"
 
     formula.write_text(text)

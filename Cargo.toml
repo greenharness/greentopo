@@ -1,19 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/aval-core", "crates/aval"]
+members = ["crates/greentopo-core", "crates/greentopo"]
 
 # What the source is allowed to require. CI's `msrv` job is what keeps this
 # honest; a `rust-version` nobody compiles against is a comment with syntax.
 [workspace.package]
 rust-version = "1.74"
-version = "1.12.0"
+version = "2.0.0"
 license = "MIT"
-repository = "https://github.com/fredericrous/aval"
+repository = "https://github.com/greenharness/greentopo"
 authors = ["Frederic Rousseau"]
 edition = "2021"
 
-# The one place the inter-crate version is written. `aval` depends on
-# `aval-core`, and crates.io resolves that by VERSION while a checkout resolves
+# The one place the inter-crate version is written. `greentopo` depends on
+# `greentopo-core`, and crates.io resolves that by VERSION while a checkout resolves
 # it by PATH, so a manifest carrying its own literal is a release where the two
 # can disagree.
 # The lint set lives here rather than only in CI's clippy invocation, so an
@@ -38,7 +38,7 @@ needless_pass_by_value = "warn"
 redundant_clone = "warn"
 
 [workspace.dependencies]
-aval-core = { path = "crates/aval-core", version = "1.12.0" }
+greentopo-core = { path = "crates/greentopo-core", version = "2.0.0" }
 
 [profile.release]
 strip = true

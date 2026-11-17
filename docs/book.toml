@@ -10,8 +10,8 @@
 ## it is a file in the repository that the site does not have.
 
 [book]
-title = "aval"
-description = "Ask what the current architecture decision is, and get a typed answer: git is the history, ADRs are the evidence, `aval resolve` tells you what is true now."
+title = "greentopo"
+description = "Ask what the current architecture decision is, and get a typed answer: git is the history, ADRs are the evidence, `greentopo resolve` tells you what is true now."
 authors = ["Frederic Rousseau"]
 language = "en"
 src = "."
@@ -28,9 +28,9 @@ create-missing = false
 [output.html]
 default-theme = "rust"
 preferred-dark-theme = "ayu"
-git-repository-url = "https://github.com/fredericrous/aval"
-edit-url-template = "https://github.com/fredericrous/aval/edit/main/docs/{path}"
-site-url = "/aval/"
+git-repository-url = "https://github.com/greenharness/greentopo"
+edit-url-template = "https://github.com/greenharness/greentopo/edit/main/docs/{path}"
+site-url = "/greentopo/"
 
 [output.html.fold]
 enable = true

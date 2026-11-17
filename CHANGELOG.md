@@ -1,5 +1,30 @@
 # Changelog
 
+## v2.0.0
+
+### Changed
+
+- **aval is now greentopo** (ADR-0072, ADR-0074). The repository moved to
+  `greenharness/greentopo` (old URLs redirect). The binary, the crates
+  (`greentopo`, `greentopo-core`), the npm packages (`@greenharness/greentopo`
+  and `@greenharness/greentopo-<platform>`), the MCP server and its tools
+  (`greentopo`, `greentopo_*`, `greentopo://`), the environment
+  (`GREENTOPO_*`), the published pack (`greentopo.pack`, key `greentopo:`),
+  the hook (`.claude/hooks/greentopo-heads.sh`) and its cache
+  (`~/.cache/greentopo`) all carry the new name. There is no `aval` alias.
+  Commands, flags, JSON and exit codes are otherwise unchanged. Workflow
+  pins still named `AVAL_VERSION` are not read by `greentopo hook install
+  --check` until the fleet sweep renames them.
+
+### Added
+
+- **One fallback read for packs under the old name.** A vendored pack keyed
+  `aval:` still loads, and a source that publishes only `aval.pack` is still
+  fetched; each prints one `warning:` line on stderr naming the command that
+  fixes it (silenced by `--quiet`; in `check --json`, an entry under
+  `warnings`), and the exit status is unchanged. The fleet sweep that renames
+  every committed pack removes this read.
+
 ## v1.12.0
 
 ### Added

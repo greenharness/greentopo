@@ -1,0 +1,894 @@
+//! The decision graph: the Layer A checks that need more than one document,
+//! then heads, resolution and derived status.
+//!
+//! A `Graph` can only be constructed from a corpus that passed Layer A, so
+//! every method below operates on a model that is known to be well formed.
+//! That is what keeps Layer B reachable: competing heads are a verdict about
+//! the decisions, not a failure to build the graph (SEMANTICS section 9).
+
+use crate::model::*;
+use std::collections::BTreeSet;
+use std::fmt;
+
+/// A resolution result. Carries a stable machine token and a stable note, the
+/// shape `PolicyDecision` uses as `rule_fired` plus `reason`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    Active {
+        adr: AdrId,
+        choice: String,
+        matched_scope: String,
+        /// True when the answer came from the default scope by fallback.
+        inherited: bool,
+        reason: Option<String>,
+    },
+    Undecided,
+    Retired {
+        adr: AdrId,
+        matched_scope: String,
+        inherited: bool,
+        reason: Option<String>,
+    },
+    Contradiction {
+        heads: Vec<AdrId>,
+        /// The slot that actually disagreed, which may be the default scope
+        /// reached by fallback rather than the one asked about. `None` when
+        /// several declared scopes answered, so no single slot disagreed.
+        matched_scope: Option<String>,
+        /// (scope, adr) of every answering entry when declared scopes
+        /// disagree with each other; empty for a single-slot contradiction.
+        by_scope: Vec<(String, String)>,
+    },
+    Unknown {
+        what: Unknown,
+        name: String,
+        suggestion: Option<String>,
+    },
+}
+
+/// The graph contradicts itself: a slot is occupied and has no head.
+///
+/// Deliberately NOT a `Verdict`. It used to be one, carrying exit 3 — a
+/// FAILURE code — inside an enum whose every other variant is an answer, which
+/// made "the tool broke" indistinguishable from "here is what was decided" at
+/// the type level. Every caller then had to remember a variant that means the
+/// opposite of the others, and one did not: the MCP surface reported it as
+/// `isError: false`, against the rule SEMANTICS section 14.1 states.
+///
+/// Only a replacement cycle can produce it, and Layer A rejects those, so this
+/// is unreachable against a corpus that loaded. That is the argument for
+/// keeping it out of the success type rather than for trusting callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Inconsistent {
+    pub message: String,
+}
+
+impl fmt::Display for Inconsistent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Inconsistent {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unknown {
+    Key,
+    Scope,
+    /// The scope is declared and the key is registered, but the registry does
+    /// not apply that key at that scope. The question is malformed rather than
+    /// unanswered, so it is never allowed to fall back to the default scope and
+    /// return an answer about a different axis.
+    ScopeForKey {
+        declared: Vec<String>,
+    },
+}
+
+impl Unknown {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Unknown::Key => "key",
+            Unknown::Scope => "scope",
+            Unknown::ScopeForKey { .. } => "scope-for-key",
+        }
+    }
+}
+
+/// The scopes a restricted key admits, for a message. An empty list is a
+/// meaningful declaration, not a missing one: the key is decided fleet-wide
+/// only, so say that rather than printing nothing.
+fn scope_list(declared: &[String]) -> String {
+    if declared.is_empty() {
+        "the default scope only".to_string()
+    } else {
+        declared.join(", ")
+    }
+}
+
+impl Verdict {
+    /// The machine token. Part of the contract: SEMANTICS section 15.
+    pub fn token(&self) -> &'static str {
+        match self {
+            Verdict::Active { .. } => "active",
+            Verdict::Undecided => "undecided",
+            Verdict::Retired { .. } => "retired",
+            Verdict::Contradiction { .. } => "contradiction",
+            Verdict::Unknown { .. } => "unknown",
+        }
+    }
+
+    /// The exit code. SEMANTICS section 14: verdicts start at 4 so that no
+    /// verdict shares a range with a failure to reach one.
+    pub fn exit(&self) -> i32 {
+        match self {
+            Verdict::Active { .. } => 0,
+            Verdict::Undecided => 4,
+            Verdict::Contradiction { .. } => 5,
+            Verdict::Retired { .. } => 6,
+            Verdict::Unknown { .. } => 7,
+        }
+    }
+
+    /// The human note. Stable, asserted by fixtures, and a breaking change to
+    /// alter.
+    pub fn note(&self, slot: Slot<'_>) -> String {
+        match self {
+            Verdict::Active { adr, .. } => format!("decided by {}", adr),
+            Verdict::Undecided => format!("no accepted decision for {}", slot),
+            Verdict::Retired { adr, .. } => format!("retired by {}", adr),
+            Verdict::Contradiction { heads, .. } => format!(
+                "{} heads for {}; the corpus disagrees with itself",
+                heads.len(),
+                slot
+            ),
+            Verdict::Unknown { what, name, .. } => match what {
+                Unknown::Key => "no such decision key".to_string(),
+                Unknown::Scope => "no such scope".to_string(),
+                Unknown::ScopeForKey { declared } => format!(
+                    "`{}` is not decided per `{}`; the registry applies it to {}",
+                    slot.key,
+                    name,
+                    scope_list(declared)
+                ),
+            },
+        }
+    }
+
+    pub fn adr(&self) -> Option<&AdrId> {
+        match self {
+            Verdict::Active { adr, .. } | Verdict::Retired { adr, .. } => Some(adr),
+            _ => None,
+        }
+    }
+}
+
+/// Where an ADR stands, derived and never written: SEMANTICS section 8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivedStatus {
+    Draft,
+    Active,
+    PartiallySuperseded,
+    Superseded,
+    Empty,
+}
+
+impl DerivedStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DerivedStatus::Draft => "draft",
+            DerivedStatus::Active => "active",
+            DerivedStatus::PartiallySuperseded => "partially superseded",
+            DerivedStatus::Superseded => "superseded",
+            DerivedStatus::Empty => "empty",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Graph {
+    corpus: Corpus,
+}
+
+impl Graph {
+    /// Run every cross-document Layer A check and build the graph.
+    pub fn build(corpus: Corpus) -> Result<Graph, Vec<Finding>> {
+        let mut f = Vec::new();
+        check_ids_unique(&corpus, &mut f);
+        check_vocabulary(&corpus, &mut f);
+        f.extend(in_scopes_findings(&corpus));
+        check_edges(&corpus, &mut f);
+        check_retirements(&corpus, &mut f);
+        check_cycles(&corpus, &mut f);
+        check_rules(&corpus, &mut f);
+        check_traits(&corpus, &mut f);
+        if f.is_empty() {
+            Ok(Graph { corpus })
+        } else {
+            f.sort_by_key(|x| (x.file.clone(), x.line));
+            Err(f)
+        }
+    }
+
+    pub fn corpus(&self) -> &Corpus {
+        &self.corpus
+    }
+
+    pub fn registry(&self) -> &Registry {
+        &self.corpus.registry
+    }
+
+    /// Every accepted entry at this slot, replaced or not.
+    fn accepted_at(&self, slot: Slot<'_>) -> Vec<(&Adr, &Entry)> {
+        self.corpus
+            .adrs
+            .iter()
+            .filter(|a| a.status.is_accepted())
+            .filter_map(|a| a.entry_at(slot).map(|e| (a, e)))
+            .collect()
+    }
+
+    /// True when at least one accepted entry occupies the slot. A slot holding
+    /// only drafts is not occupied, which is what lets a proposal be opened
+    /// without changing the current answer.
+    pub fn occupied(&self, slot: Slot<'_>) -> bool {
+        !self.accepted_at(slot).is_empty()
+    }
+
+    /// The heads of a slot: accepted, and not replaced by an accepted entry.
+    ///
+    /// One pass over the slot's entries, and set membership rather than a
+    /// linear scan per candidate: `heads` is called once per occupied slot by
+    /// `keys`, `heads --json` and the projection, so the old shape — two
+    /// allocations of the same vector and an O(n·m) `contains` — multiplied
+    /// with the size of the corpus rather than the size of the slot.
+    pub fn heads(&self, slot: Slot<'_>) -> Vec<(&Adr, &Entry)> {
+        let at = self.accepted_at(slot);
+        let replaced: BTreeSet<&str> = at
+            .iter()
+            .flat_map(|(_, e)| e.replaces().iter().map(|s| s.as_str()))
+            .collect();
+        let mut h: Vec<(&Adr, &Entry)> = at
+            .into_iter()
+            .filter(|(a, _)| !replaced.contains(a.id.as_str()))
+            .collect();
+        h.sort_by(|x, y| x.0.id.cmp(&y.0.id));
+        h
+    }
+
+    /// SEMANTICS section 5.
+    pub fn resolve(&self, key: &str, scope: &str) -> Result<Verdict, Inconsistent> {
+        if !self.corpus.registry.has_key(key) {
+            return Ok(Verdict::Unknown {
+                what: Unknown::Key,
+                name: key.to_string(),
+                suggestion: suggest(
+                    key,
+                    self.corpus.registry.keys.iter().map(|k| k.name.as_str()),
+                )
+                .map(str::to_string),
+            });
+        }
+        if !self.corpus.registry.has_scope(scope) {
+            return Ok(Verdict::Unknown {
+                what: Unknown::Scope,
+                name: scope.to_string(),
+                suggestion: suggest(
+                    scope,
+                    self.corpus.registry.scopes.iter().map(|s| s.as_str()),
+                )
+                .map(str::to_string),
+            });
+        }
+        if !self.corpus.registry.admits(key, scope) {
+            let declared = self
+                .corpus
+                .registry
+                .key(key)
+                .and_then(|d| d.scopes.clone())
+                .unwrap_or_default();
+            return Ok(Verdict::Unknown {
+                what: Unknown::ScopeForKey { declared },
+                name: scope.to_string(),
+                suggestion: None,
+            });
+        }
+        self.resolve_at(key, scope, scope)
+    }
+
+    /// SEMANTICS section 5, default query scope: answer at the scopes the
+    /// repository declares in `in_scopes`, from each scope's own slot only.
+    pub fn resolve_default(&self, key: &str) -> Result<Verdict, Inconsistent> {
+        let answering = self.answering_scopes(key);
+        match answering.as_slice() {
+            [] => self.resolve(key, DEFAULT_SCOPE),
+            [only] => self.resolve_at(key, only, only),
+            several => {
+                let mut by_scope = Vec::new();
+                for scope in several {
+                    for (adr, _) in self.heads(Slot { key, scope }) {
+                        by_scope.push((scope.to_string(), adr.id.as_str().to_string()));
+                    }
+                }
+                let mut heads: Vec<AdrId> = several
+                    .iter()
+                    .flat_map(|scope| self.heads(Slot { key, scope }))
+                    .map(|(adr, _)| adr.id.clone())
+                    .collect();
+                heads.sort();
+                heads.dedup();
+                Ok(Verdict::Contradiction {
+                    heads,
+                    matched_scope: None,
+                    by_scope,
+                })
+            }
+        }
+    }
+
+    /// The declared scopes that admit `key` and hold an entry in their own
+    /// slot. A scope that would only inherit the default head is not one.
+    fn answering_scopes<'s>(&'s self, key: &str) -> Vec<&'s str> {
+        let registry = &self.corpus.registry;
+        if !registry.has_key(key) {
+            return Vec::new();
+        }
+        registry
+            .in_scopes
+            .iter()
+            .filter(|scope| registry.admits(key, scope))
+            .filter(|scope| self.occupied(Slot { key, scope }))
+            .map(|scope| scope.as_str())
+            .collect()
+    }
+
+    /// Check findings for keys that more than one declared scope answers.
+    /// Warnings: they never make `check` fail.
+    pub fn in_scopes_conflicts(&self) -> Vec<Finding> {
+        self.corpus
+            .registry
+            .keys
+            .iter()
+            .filter_map(|def| {
+                let answering = self.answering_scopes(&def.name);
+                (answering.len() > 1).then(|| {
+                    Finding::new(
+                        Layer::B,
+                        "in-scopes-conflict",
+                        format!(
+                            "`{}` is answered by more than one declared scope ({}); narrow \
+                             `in_scopes` or decide the key at one scope",
+                            def.name,
+                            answering.join(", ")
+                        ),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn resolve_at(&self, key: &str, scope: &str, queried: &str) -> Result<Verdict, Inconsistent> {
+        let slot = Slot { key, scope };
+        let h = self.heads(slot);
+        if h.len() > 1 {
+            return Ok(Verdict::Contradiction {
+                heads: h.iter().map(|(a, _)| a.id.clone()).collect(),
+                matched_scope: Some(scope.to_string()),
+                by_scope: Vec::new(),
+            });
+        }
+        if let Some((adr, e)) = h.first() {
+            let inherited = scope != queried;
+            return Ok(match &e.kind {
+                EntryKind::Choice(c) => Verdict::Active {
+                    adr: adr.id.clone(),
+                    choice: c.clone(),
+                    matched_scope: scope.to_string(),
+                    inherited,
+                    reason: e.reason.clone(),
+                },
+                EntryKind::Retire => Verdict::Retired {
+                    adr: adr.id.clone(),
+                    matched_scope: scope.to_string(),
+                    inherited,
+                    reason: e.reason.clone(),
+                },
+            });
+        }
+        if self.occupied(slot) {
+            // Only a replacement cycle can produce this, and Layer A rejects
+            // those. Never degrade it into a verdict.
+            return Err(Inconsistent {
+                message: format!("{} is occupied but has no head", slot),
+            });
+        }
+        if scope != DEFAULT_SCOPE {
+            return self.resolve_at(key, DEFAULT_SCOPE, queried);
+        }
+        Ok(Verdict::Undecided)
+    }
+
+    /// The chain for a slot, oldest first. History, explicitly not authority.
+    pub fn history(&self, slot: Slot<'_>) -> Vec<&Adr> {
+        // Walk back from each head through `replaces`, then present in
+        // discovery order reversed so the oldest reads first.
+        let mut order: Vec<&Adr> = Vec::new();
+        let mut stack: Vec<&Adr> = self.heads(slot).into_iter().map(|(a, _)| a).collect();
+        while let Some(a) = stack.pop() {
+            if order.iter().any(|x| x.id == a.id) {
+                continue;
+            }
+            order.push(a);
+            if let Some(e) = a.entry_at(slot) {
+                for p in e.replaces() {
+                    if let Some(pa) = self.corpus.adr(p) {
+                        stack.push(pa);
+                    }
+                }
+            }
+        }
+        order.reverse();
+        order
+    }
+
+    /// SEMANTICS section 8. Per-entry head status drives the document status,
+    /// so partial supersession is visible rather than collapsed.
+    pub fn derived_status(&self, adr: &Adr) -> DerivedStatus {
+        if !adr.status.is_accepted() {
+            return DerivedStatus::Draft;
+        }
+        if adr.decisions.is_empty() {
+            return DerivedStatus::Empty;
+        }
+        let flags: Vec<bool> = adr
+            .decisions
+            .iter()
+            .map(|e| self.heads(e.slot()).iter().any(|(a, _)| a.id == adr.id))
+            .collect();
+        match (flags.iter().all(|b| *b), flags.iter().any(|b| *b)) {
+            (true, _) => DerivedStatus::Active,
+            (false, true) => DerivedStatus::PartiallySuperseded,
+            (false, false) => DerivedStatus::Superseded,
+        }
+    }
+
+    /// Which of an ADR's entries are still heads, and which are not.
+    pub fn entry_status<'s>(&'s self, adr: &'s Adr) -> Vec<(&'s Entry, bool)> {
+        adr.decisions
+            .iter()
+            .map(|e| (e, self.heads(e.slot()).iter().any(|(a, _)| a.id == adr.id)))
+            .collect()
+    }
+
+    /// Why a rule is not active, or `None` when it is.
+    ///
+    /// A rule has no status of its own: it is active exactly while the record
+    /// that adopts it is accepted and still holds. That is the whole reason
+    /// there are no per-rule supersession edges — the graph already tracks the
+    /// record, so tracking the rule too would be a second copy of the same
+    /// fact, and the second copy is the one that goes stale.
+    ///
+    /// A draft's rules are inactive: a proposal's rules bind nobody until the
+    /// proposal is accepted. `partially-superseded` stays active, because the
+    /// record still decides something and the reader can see which entries.
+    ///
+    /// Deliberately not a check. A rule adopted by a superseded record is
+    /// **inactive, not wrong** — the ordinary end of a rule's life is the
+    /// record that adopted it being replaced — so `greentopo rules --all` shows it
+    /// with this reason and `check` says nothing.
+    /// The reason is the predicate only — `is superseded` — because the subject
+    /// is `r.adopts`, which the caller already has; `rule_reason` joins the two
+    /// so every surface says it the same way.
+    pub fn rule_active(&self, r: &Rule) -> Option<&'static str> {
+        let Some(adr) = self.corpus.adr(&r.adopts) else {
+            return Some("is unknown");
+        };
+        match self.derived_status(adr) {
+            DerivedStatus::Active | DerivedStatus::PartiallySuperseded => None,
+            DerivedStatus::Draft => Some("is a draft"),
+            DerivedStatus::Superseded => Some("is superseded"),
+            DerivedStatus::Empty => Some("decides nothing"),
+        }
+    }
+
+    /// Why a rule is inactive, as one sentence, or `None` when it is active.
+    pub fn rule_reason(&self, r: &Rule) -> Option<String> {
+        self.rule_active(r)
+            .map(|why| format!("adopting record {} {}", r.adopts, why))
+    }
+
+    /// Layer B. Every slot carrying more than one head.
+    pub fn single_head_findings(&self) -> Vec<Finding> {
+        let mut out = Vec::new();
+        for slot in self.corpus.slots() {
+            let h = self.heads(slot);
+            if h.len() > 1 {
+                let who: Vec<AdrId> = h.iter().map(|(a, _)| a.id.clone()).collect();
+                out.push(Finding::new(
+                    Layer::B,
+                    "single-head",
+                    format!("{} has {} heads: {}", slot, h.len(), who.join(", ")),
+                ));
+            }
+        }
+        out
+    }
+}
+
+fn a(check: &'static str, msg: impl Into<String>) -> Finding {
+    Finding::new(Layer::A, check, msg)
+}
+
+fn check_ids_unique(c: &Corpus, out: &mut Vec<Finding>) {
+    for (i, adr) in c.adrs.iter().enumerate() {
+        if let Some(prev) = c.adrs[..i].iter().find(|p| p.id == adr.id) {
+            out.push(
+                a(
+                    "id-unique",
+                    format!("`{}` is already claimed by {}", adr.id, prev.file),
+                )
+                .in_file(adr.file.clone()),
+            );
+        }
+    }
+}
+
+fn in_scopes_findings(corpus: &Corpus) -> Vec<Finding> {
+    let registry = &corpus.registry;
+    registry
+        .in_scopes
+        .iter()
+        .filter(|scope| !registry.has_scope(scope))
+        .map(|scope| {
+            let hint = suggest(scope, registry.scopes.iter().map(|known| known.as_str()))
+                .map(|near| format!("; did you mean `{}`", near))
+                .unwrap_or_default();
+            a(
+                "in-scopes-declared",
+                format!(
+                    "`in_scopes` names `{}`, which is not in the registry{}",
+                    scope, hint
+                ),
+            )
+        })
+        .collect()
+}
+
+fn check_vocabulary(c: &Corpus, out: &mut Vec<Finding>) {
+    for adr in &c.adrs {
+        for e in &adr.decisions {
+            if !c.registry.has_key(&e.key) {
+                let hint = suggest(&e.key, c.registry.keys.iter().map(|k| k.name.as_str()))
+                    .map(|s| format!("; did you mean `{}`", s))
+                    .unwrap_or_default();
+                out.push(
+                    a(
+                        "key-registered",
+                        format!("`{}` is not in the registry{}", e.key, hint),
+                    )
+                    .at(adr.file.clone(), e.line),
+                );
+            }
+            if !c.registry.has_scope(&e.scope) {
+                let hint = suggest(&e.scope, c.registry.scopes.iter().map(|s| s.as_str()))
+                    .map(|s| format!("; did you mean `{}`", s))
+                    .unwrap_or_default();
+                out.push(
+                    a(
+                        "scope-declared",
+                        format!("scope `{}` is not in the registry{}", e.scope, hint),
+                    )
+                    .at(adr.file.clone(), e.line),
+                );
+            } else if c.registry.has_key(&e.key) && !c.registry.admits(&e.key, &e.scope) {
+                let declared = c.registry.key(&e.key).and_then(|d| d.scopes.clone());
+                out.push(
+                    a(
+                        "scope-applies",
+                        format!(
+                            "`{}` is decided at scope `{}`, but the registry applies \
+                             that key to {}",
+                            e.key,
+                            e.scope,
+                            scope_list(&declared.unwrap_or_default())
+                        ),
+                    )
+                    .at(adr.file.clone(), e.line),
+                );
+            }
+        }
+    }
+}
+
+fn check_edges(c: &Corpus, out: &mut Vec<Finding>) {
+    for adr in &c.adrs {
+        for e in &adr.decisions {
+            for target in e.replaces() {
+                match c.adr(target) {
+                    None => out.push(
+                        a(
+                            "edge-resolves",
+                            format!("`replaces: {}` names no ADR in this corpus", target),
+                        )
+                        .at(adr.file.clone(), e.line),
+                    ),
+                    Some(t) if t.entry_at(e.slot()).is_none() => out.push(
+                        a(
+                            "edge-resolves",
+                            format!(
+                                "{} has no entry for {}, so there is nothing to replace",
+                                target,
+                                e.slot()
+                            ),
+                        )
+                        .at(adr.file.clone(), e.line),
+                    ),
+                    Some(t) => {
+                        // SEMANTICS section 7: acceptance order must not be
+                        // able to change resolution.
+                        if adr.status.is_accepted() && !t.status.is_accepted() {
+                            out.push(
+                                a(
+                                    "no-accepted-replaces-draft",
+                                    format!("{} is a draft; there is nothing to replace", target),
+                                )
+                                .at(adr.file.clone(), e.line),
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(target) = &e.overrides {
+                let global = Slot {
+                    key: &e.key,
+                    scope: DEFAULT_SCOPE,
+                };
+                match c.adr(target) {
+                    None => out.push(
+                        a(
+                            "edge-resolves",
+                            format!("`overrides: {}` names no ADR in this corpus", target),
+                        )
+                        .at(adr.file.clone(), e.line),
+                    ),
+                    Some(t) if t.entry_at(global).is_none() => out.push(
+                        a(
+                            "edge-resolves",
+                            format!("{} has no entry for {}", target, global),
+                        )
+                        .at(adr.file.clone(), e.line),
+                    ),
+                    Some(_) => {}
+                }
+            }
+        }
+    }
+}
+
+/// SEMANTICS section 6.1: a retirement must name what it retires, and the two
+/// branches are not interchangeable.
+fn check_retirements(c: &Corpus, out: &mut Vec<Finding>) {
+    for adr in &c.adrs {
+        for e in adr.decisions.iter().filter(|e| e.is_retire()) {
+            if !e.is_first() {
+                continue; // the `replaces` branch; `check_edges` covers it
+            }
+            let global = Slot {
+                key: &e.key,
+                scope: DEFAULT_SCOPE,
+            };
+            let global_occupied = c
+                .adrs
+                .iter()
+                .filter(|x| x.status.is_accepted())
+                .any(|x| x.entry_at(global).is_some());
+            match (&e.overrides, global_occupied) {
+                (Some(_), true) => {}
+                (Some(_), false) => out.push(
+                    a(
+                        "retire-names-predecessor",
+                        format!(
+                            "nothing is decided at {}, so this scope inherits nothing \
+                             to retire; the answer is already undecided",
+                            global
+                        ),
+                    )
+                    .at(adr.file.clone(), e.line),
+                ),
+                (None, _) => out.push(
+                    a(
+                        "retire-names-predecessor",
+                        "a retirement with `first: true` must name the inherited \
+                         decision it opts out of, with `overrides:`"
+                            .to_string(),
+                    )
+                    .at(adr.file.clone(), e.line),
+                ),
+            }
+        }
+    }
+}
+
+/// The two Layer A facts about rules that need more than one file.
+///
+/// Both fire only where a corpus declares rules at all, which is what makes
+/// 1.2.0 a MINOR release: on a corpus with no `rules:` in its registry there is
+/// nothing to iterate and no verdict can change.
+fn check_rules(c: &Corpus, out: &mut Vec<Finding>) {
+    for (i, r) in c.rules.iter().enumerate() {
+        // One id, one rule, across every rules file and every vendored pack —
+        // the same rule as keys, and for the same reason: a consumer that
+        // re-declares a rule the fleet declares has two statements of one
+        // practice, and nothing keeps them in step. The finding lands on the
+        // local file where one of the two is local.
+        if let Some(prev) = c.rules[..i].iter().find(|p| p.id == r.id) {
+            let (at, other) = if r.is_vendored() && !prev.is_vendored() {
+                (prev, r)
+            } else {
+                (r, prev)
+            };
+            out.push(
+                a(
+                    "rule-id-unique",
+                    format!(
+                        "`{}` is already declared by {}{}",
+                        r.id,
+                        other.file,
+                        match &other.pack {
+                            Some(p) => format!(
+                                ", vendored from the `{}` pack; a vendored rule is \
+                                 not re-declared locally",
+                                p
+                            ),
+                            None => String::new(),
+                        }
+                    ),
+                )
+                .in_file(at.file.clone()),
+            );
+        }
+
+        // A rule's authority is its adopting record's, so the record has to be
+        // one this corpus can see. A LOCAL rule must adopt a local record: a
+        // consumer stating the fleet's rules would be claiming authority it
+        // does not have, and the fleet's own rules arrive through its pack.
+        match c.adr(&r.adopts) {
+            None => out.push(
+                a(
+                    "rule-adopts-resolves",
+                    format!("`adopts: {}` names no record in this corpus", r.adopts),
+                )
+                .in_file(r.file.clone()),
+            ),
+            Some(adr) if adr.is_vendored() && !r.is_vendored() => out.push(
+                a(
+                    "rule-adopts-resolves",
+                    format!(
+                        "`adopts: {}` is a vendored record; a rule is adopted by a \
+                         record of this corpus's own, and another repository's \
+                         rules arrive with its pack",
+                        r.adopts
+                    ),
+                )
+                .in_file(r.file.clone()),
+            ),
+            Some(_) => {}
+        }
+    }
+}
+
+/// Every trait a rule `applies` to, or an area or disclaim names, is in the
+/// vocabulary in force — the registry's own and every pack's (SEMANTICS
+/// section 2.5).
+///
+/// Both checks need a field that did not exist before 1.7.0 to reach anything,
+/// which is what keeps that release minor: a corpus without `applies`, `areas`
+/// or `disclaims` has nothing here to iterate.
+fn check_traits(c: &Corpus, out: &mut Vec<Finding>) {
+    let vocab = c.registry.vocabulary();
+    let hint = |t: &str| {
+        suggest(t, vocab.iter().map(String::as_str))
+            .map(|s| format!("; did you mean `{}`", s))
+            .unwrap_or_default()
+    };
+    for r in &c.rules {
+        // A vendored rule was checked where it was written, against the
+        // vocabulary its own pack carries, which is in `vocab` too.
+        for t in &r.applies {
+            if !vocab.contains(t) {
+                out.push(
+                    a(
+                        "rule-applies-declared",
+                        format!(
+                            "`{}` applies to `{}`, which no `traits:` declares{}",
+                            r.id,
+                            t,
+                            hint(t)
+                        ),
+                    )
+                    .in_file(r.file.clone()),
+                );
+            }
+        }
+    }
+    for (field, list) in [
+        ("areas", &c.registry.areas),
+        ("disclaims", &c.registry.disclaims),
+    ] {
+        for area in list {
+            for t in &area.traits {
+                if !vocab.contains(t) {
+                    out.push(
+                        a(
+                            "areas-declared",
+                            format!(
+                                "`{}` under `{}` names `{}`, which no `traits:` declares{}",
+                                area.glob,
+                                field,
+                                t,
+                                hint(t)
+                            ),
+                        )
+                        .at(".adr.yaml", area.line),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Replacement cycles, per slot. `replaces` only ever acts inside one slot, so
+/// a cycle cannot span slots and each is searched independently.
+fn check_cycles(c: &Corpus, out: &mut Vec<Finding>) {
+    for slot in c.slots() {
+        let mut stack: Vec<&str> = Vec::new();
+        let mut done: Vec<&str> = Vec::new();
+        for adr in &c.adrs {
+            if adr.entry_at(slot).is_some() {
+                visit(c, slot, adr.id.as_str(), &mut stack, &mut done, out);
+            }
+        }
+    }
+}
+
+fn visit<'c>(
+    c: &'c Corpus,
+    slot: Slot<'c>,
+    id: &'c str,
+    stack: &mut Vec<&'c str>,
+    done: &mut Vec<&'c str>,
+    out: &mut Vec<Finding>,
+) {
+    if done.contains(&id) {
+        return;
+    }
+    if stack.contains(&id) {
+        let at = stack.iter().position(|x| *x == id).unwrap_or(0);
+        let mut cycle: Vec<&str> = stack[at..].to_vec();
+        cycle.push(id);
+        if let Some(adr) = c.adr(id) {
+            out.push(
+                a(
+                    "no-cycle",
+                    format!("replacement cycle for {}: {}", slot, cycle.join(" -> ")),
+                )
+                .in_file(adr.file.clone()),
+            );
+        }
+        done.push(id);
+        return;
+    }
+    stack.push(id);
+    if let Some(adr) = c.adr(id) {
+        if let Some(e) = adr.entry_at(slot) {
+            for p in e.replaces() {
+                if c.adr(p).is_some() {
+                    let pid: &'c str = c.adr(p).unwrap().id.as_str();
+                    visit(c, slot, pid, stack, done, out);
+                }
+            }
+        }
+    }
+    stack.pop();
+    done.push(id);
+}

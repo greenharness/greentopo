@@ -1,0 +1,1527 @@
+//! Output. Human text on stdout, or `--json` and nothing else.
+//!
+//! Every verdict prints its machine token first, so a human reading a terminal
+//! and a script reading stdout are looking at the same word.
+
+use crate::load::{self, Corpora, Loaded, Repo};
+use crate::provenance::{self, Provenance};
+use greentopo_core::applicability::{self, Omitted, Scope};
+use greentopo_core::graph::{DerivedStatus, Graph, Inconsistent, Unknown, Verdict};
+use greentopo_core::json::Json;
+use greentopo_core::model::{Adr, AdrId, Finding, Governs, Level, Rule, Slot, DEFAULT_SCOPE};
+use greentopo_core::pack::Pack;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// A resolved answer, with everything either rendering needs.
+///
+/// Resolution is not the whole job: a contradiction is enriched with the commit
+/// that introduced each competing head, and an answer that came from a pack
+/// carries the pack's name. **Both renderings need both**, so a helper that
+/// returned only the JSON would leave its second caller to rebuild the
+/// enrichment — which is how the copy this crate's `lib.rs` records came to
+/// drift. One value, two renderings, one producer.
+#[derive(Debug)]
+pub struct Answer<'a> {
+    pub verdict: Verdict,
+    pub slot: Slot<'a>,
+    pub prov: Vec<(AdrId, Provenance)>,
+    pub pack: Option<String>,
+    /// Where the scope came from: the flag, the repository's `in_scopes`, or
+    /// the default scope (SEMANTICS section 5).
+    pub source: ScopeSource,
+}
+
+/// Where the scope of an answer came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSource {
+    Flag,
+    InScopes,
+    Default,
+}
+
+impl ScopeSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScopeSource::Flag => "flag",
+            ScopeSource::InScopes => "in_scopes",
+            ScopeSource::Default => "default",
+        }
+    }
+}
+
+/// Which source answered a query made with `scope` (`None` = no flag).
+pub fn scope_source(scope: Option<&str>, verdict: &Verdict) -> ScopeSource {
+    if scope.is_some() {
+        return ScopeSource::Flag;
+    }
+    match verdict {
+        Verdict::Contradiction { by_scope, .. } if !by_scope.is_empty() => ScopeSource::InScopes,
+        Verdict::Contradiction {
+            matched_scope: Some(matched_scope),
+            ..
+        } if matched_scope != DEFAULT_SCOPE => ScopeSource::InScopes,
+        Verdict::Active { matched_scope, .. } | Verdict::Retired { matched_scope, .. }
+            if matched_scope != DEFAULT_SCOPE =>
+        {
+            ScopeSource::InScopes
+        }
+        Verdict::Active { .. }
+        | Verdict::Retired { .. }
+        | Verdict::Contradiction { .. }
+        | Verdict::Undecided
+        | Verdict::Unknown { .. } => ScopeSource::Default,
+    }
+}
+
+/// Resolve, and enrich the verdict the way both surfaces need it.
+///
+/// `Err` is not a verdict and never becomes one: an inconsistent graph means no
+/// question was answered, and every surface must say so in whatever way it says
+/// "the tool could not answer".
+pub fn answer<'a>(
+    g: &Graph,
+    root: &Path,
+    key: &'a str,
+    scope: Option<&'a str>,
+) -> Result<Answer<'a>, Inconsistent> {
+    let verdict = match scope {
+        Some(named) => g.resolve(key, named)?,
+        None => g.resolve_default(key)?,
+    };
+    let slot = Slot {
+        key,
+        scope: scope.unwrap_or(DEFAULT_SCOPE),
+    };
+    let source = scope_source(scope, &verdict);
+
+    // Competing heads are the one verdict where "which commit did this" is
+    // load-bearing, because parallel worktrees make them routine. Enrichment
+    // only; a repository with no history still gets exit 5.
+    let prov = match &verdict {
+        Verdict::Contradiction {
+            heads,
+            matched_scope,
+            by_scope,
+        } => heads
+            .iter()
+            .map(|id| {
+                let mut searched: Vec<&str> = by_scope.iter().map(|(at, _)| at.as_str()).collect();
+                if searched.is_empty() {
+                    searched.push(matched_scope.as_deref().unwrap_or(DEFAULT_SCOPE));
+                }
+                let found = searched
+                    .into_iter()
+                    .flat_map(|at| g.heads(Slot { key, scope: at }))
+                    .find(|(a, _)| &a.id == id)
+                    .map(|(a, e)| (a.file.clone(), e.line));
+                match found {
+                    Some((file, line)) => (
+                        id.clone(),
+                        provenance::for_line(root, &root.join(file), line),
+                    ),
+                    None => (id.clone(), Provenance::Unavailable),
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    // Which pack the answer came from, when it came from one. A consumer has
+    // to be able to tell a decision it can change from one it cannot, and
+    // reading the id prefix works only for somebody who already knows the
+    // convention.
+    let pack = verdict
+        .adr()
+        .and_then(|id| g.corpus().adr(id))
+        .and_then(|a| a.pack.clone());
+
+    Ok(Answer {
+        verdict,
+        slot,
+        prov,
+        pack,
+        source,
+    })
+}
+
+impl Answer<'_> {
+    pub fn exit(&self) -> i32 {
+        self.verdict.exit()
+    }
+
+    pub fn json(&self) -> Json {
+        verdict_json(&self.verdict, self.slot, &self.prov)
+            .set("scope_source", self.source.as_str())
+            .set_opt("pack", self.pack.clone())
+    }
+
+    pub fn text(&self) -> String {
+        let mut s = verdict_text(&self.verdict, self.slot, &self.prov);
+        if let Some(p) = &self.pack {
+            s.push_str(&format!(
+                "  vendored: from the `{}` pack; change it there, not here\n",
+                p
+            ));
+        }
+        s
+    }
+}
+
+/// The `--json` error object: a question that could not be asked at all.
+///
+/// Shared so the MCP server reports an unreadable corpus in the same shape the
+/// CLI does, rather than inventing a second one.
+pub fn error_json(exit: i32, message: &str, findings: &[Finding]) -> Json {
+    Json::obj()
+        .set("ok", false)
+        .set("exit", exit)
+        .set("error", message)
+        .set(
+            "findings",
+            findings.iter().map(finding_json).collect::<Vec<_>>(),
+        )
+}
+
+pub fn finding_json(f: &Finding) -> Json {
+    Json::obj()
+        .set("layer", f.layer.as_str())
+        .set("check", f.check)
+        .set("message", f.message.as_str())
+        .set_opt("file", f.file.clone())
+        .set_opt("line", f.line)
+}
+
+pub fn verdict_json(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -> Json {
+    let base = Json::obj()
+        .set("state", v.token())
+        .set("exit", v.exit())
+        .set("key", slot.key)
+        .set("scope", slot.scope)
+        .set("note", v.note(slot));
+    match v {
+        Verdict::Active {
+            adr,
+            choice,
+            matched_scope,
+            inherited,
+            reason,
+        } => base
+            .set("adr", adr.as_str())
+            .set("choice", choice.as_str())
+            .set("matched_scope", matched_scope.as_str())
+            .set("inherited", *inherited)
+            .set_opt("reason", reason.clone()),
+        Verdict::Retired {
+            adr,
+            matched_scope,
+            inherited,
+            reason,
+        } => base
+            .set("adr", adr.as_str())
+            .set("matched_scope", matched_scope.as_str())
+            .set("inherited", *inherited)
+            .set_opt("reason", reason.clone()),
+        Verdict::Contradiction {
+            heads,
+            matched_scope,
+            by_scope,
+        } => {
+            let json = base
+                .set(
+                    "heads",
+                    heads
+                        .iter()
+                        .map(|head| {
+                            let provenance = prov.iter().find(|(id, _)| id == head);
+                            Json::obj().set("adr", head.as_str()).set(
+                                "provenance",
+                                Json::obj()
+                                    .set(
+                                        "state",
+                                        provenance
+                                            .map(|(_, state)| state.token())
+                                            .unwrap_or("unavailable"),
+                                    )
+                                    .set_opt(
+                                        "commit",
+                                        provenance.and_then(|(_, state)| match state {
+                                            Provenance::Committed(commit) => Some(commit.clone()),
+                                            Provenance::Uncommitted | Provenance::Unavailable => {
+                                                None
+                                            }
+                                        }),
+                                    ),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .set_opt("matched_scope", matched_scope.clone());
+            if by_scope.is_empty() {
+                json
+            } else {
+                json.set(
+                    "by_scope",
+                    by_scope
+                        .iter()
+                        .map(|(scope, adr)| {
+                            Json::obj()
+                                .set("scope", scope.as_str())
+                                .set("adr", adr.as_str())
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+        Verdict::Unknown {
+            what, suggestion, ..
+        } => {
+            let b = base
+                .set("unknown", what.as_str())
+                .set_opt("suggestion", suggestion.clone());
+            match what {
+                // The caller asked on the wrong axis; give it the right one
+                // rather than only the word "unknown".
+                Unknown::ScopeForKey { declared } => b.set(
+                    "applies_to",
+                    declared.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                ),
+                _ => b,
+            }
+        }
+        Verdict::Undecided => base,
+    }
+}
+
+pub fn verdict_text(v: &Verdict, slot: Slot<'_>, prov: &[(AdrId, Provenance)]) -> String {
+    let mut s = String::new();
+    match v {
+        Verdict::Active {
+            adr,
+            choice,
+            matched_scope,
+            inherited,
+            ..
+        } => {
+            s.push_str(&format!("active   {}   {}\n", adr, choice));
+            if *inherited {
+                s.push_str(&format!(
+                    "  inherited: {} decides the default scope; nothing decides {}\n",
+                    adr, slot
+                ));
+            } else if matched_scope != "*" {
+                s.push_str(&format!("  scope: {}\n", matched_scope));
+            }
+        }
+        Verdict::Retired {
+            adr,
+            inherited,
+            reason,
+            ..
+        } => {
+            s.push_str(&format!("retired   {}\n", adr));
+            if let Some(r) = reason {
+                s.push_str(&format!("  {}\n", r));
+            }
+            if *inherited {
+                s.push_str("  inherited from the default scope\n");
+            }
+        }
+        Verdict::Undecided => {
+            s.push_str(&format!("undecided   {}\n", v.note(slot)));
+        }
+        Verdict::Contradiction {
+            heads, by_scope, ..
+        } => {
+            s.push_str(&format!("contradiction   {}\n", v.note(slot)));
+            for (scope, adr) in by_scope {
+                s.push_str(&format!("  at {}: {}\n", scope, adr));
+            }
+            for h in heads {
+                match prov.iter().find(|(id, _)| id == h) {
+                    Some((_, Provenance::Committed(sha))) => {
+                        s.push_str(&format!("  {}  introduced in {}\n", h, sha))
+                    }
+                    Some((_, Provenance::Uncommitted)) => {
+                        s.push_str(&format!("  {}  not yet committed\n", h))
+                    }
+                    _ => s.push_str(&format!("  {}\n", h)),
+                }
+            }
+            s.push_str("  Stop. Do not pick one; write the ADR that replaces both.\n");
+        }
+        Verdict::Unknown {
+            what,
+            name,
+            suggestion,
+        } => {
+            // A key that does not apply at a declared scope is a different
+            // failure from a name nobody has heard of, and saying "no such
+            // scope" about a scope the registry declares would be false.
+            if matches!(what, Unknown::ScopeForKey { .. }) {
+                s.push_str(&format!("unknown   {}\n", v.note(slot)));
+                s.push_str(
+                    "  The question names the wrong axis. Nothing is wrong with the corpus.\n",
+                );
+                return s;
+            }
+            s.push_str(&format!("unknown   no such {} `{}`\n", what.as_str(), name));
+            if let Some(g) = suggestion {
+                s.push_str(&format!(
+                    "  did you mean `{}`? A suggestion is advisory and resolves nothing.\n",
+                    g
+                ));
+            }
+        }
+    }
+    s
+}
+
+fn status_word(d: DerivedStatus) -> &'static str {
+    d.as_str()
+}
+
+// ------------------------------------------------------------------ keys
+//
+// The decision vocabulary. This is DISCOVERY, not authority: §12.1 rules out
+// finding a decision by similarity, so the way to ask about a key is to know
+// its exact name, and until now nothing could list them.
+
+/// What occupies a slot, for one key.
+///
+/// Deliberately **direct occupancy only** — inheritance is not folded in.
+/// "Decided at this scope" and "answers at this scope" are different questions,
+/// and merging them rebuilds the fallback ambiguity §5 exists to prevent. The
+/// caller that wants the effective answer resolves.
+/// One occupied slot: its verdict word, the records behind it, and the choice
+/// when a single accepted record answers.
+///
+/// `None` for an unoccupied slot. The `adrs` list holds several only for a
+/// contradiction, but is a list always — a caller must never have to split a
+/// joined string to find the competing records.
+fn slot_row(g: &Graph, slot: Slot<'_>) -> Option<(&'static str, Vec<AdrId>, Option<String>)> {
+    let heads = g.heads(slot);
+    let state = match heads.len() {
+        0 => return None,
+        1 if heads[0].1.is_retire() => "retired",
+        1 => "active",
+        _ => "contradiction",
+    };
+    let adrs = heads.iter().map(|(a, _)| a.id.clone()).collect();
+    let choice = match heads.len() {
+        1 => heads[0].1.choice().map(|c| c.to_string()),
+        _ => None,
+    };
+    Some((state, adrs, choice))
+}
+
+/// Public because `relevant` reports it beside a ranked key: a corpus that
+/// decides most keys per scope answers `undecided` at the default scope, which
+/// is true and, on its own, useless to somebody who wanted to know where to
+/// ask. Two callers, one producer.
+pub fn decided_at<'a>(g: &'a Graph, key: &str) -> Vec<(&'a str, &'static str, Vec<AdrId>)> {
+    g.corpus()
+        .slots()
+        .into_iter()
+        .filter(|s| s.key == key)
+        .filter_map(|slot| slot_row(g, slot).map(|(state, adrs, _)| (slot.scope, state, adrs)))
+        .collect()
+}
+
+/// Every occupied slot, **including the contradicted ones**.
+///
+/// Deliberately a superset of `HEADS.md`. `project::head_slots` keeps only
+/// slots with exactly one head, so the projection drops a contradicted slot
+/// entirely — right for a document a person reads beside the corpus, wrong for
+/// a caller that would otherwise see a corpus looking settled exactly where it
+/// disagrees with itself.
+pub fn heads_json(g: &Graph) -> Json {
+    let rows: Vec<Json> = g
+        .corpus()
+        .slots()
+        .into_iter()
+        .filter_map(|slot| {
+            let (state, adrs, choice) = slot_row(g, slot)?;
+            Some(
+                Json::obj()
+                    .set("key", slot.key)
+                    .set("scope", slot.scope)
+                    .set("state", state)
+                    .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
+                    .set_opt("choice", choice),
+            )
+        })
+        .collect();
+    Json::obj().set("heads", rows)
+}
+
+/// Which pack declares `key`, if one does.
+///
+/// `KeyDef` carries no origin — `merge_declarations` folds pack keys into the
+/// registry — but the parsed packs are kept, so the answer is right here rather
+/// than needing a field in the model that two places would have to agree on.
+fn key_pack<'a>(packs: &'a [Pack], key: &str) -> Option<&'a str> {
+    packs
+        .iter()
+        .find(|p| p.keys.iter().any(|k| k.name == key))
+        .map(|p| p.name.as_str())
+}
+
+/// How much of the vocabulary to report.
+///
+/// Discovery is the call a caller makes BECAUSE it does not know a key name,
+/// and on the fleet's largest corpus the full answer is 10.5 KB of which the
+/// names are 1 KB. `Names` is what that caller actually needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detail {
+    /// Key, description, and the scopes it is answerable at.
+    Names,
+    /// Everything, including where each key is already decided.
+    Full,
+}
+
+pub fn keys_json(g: &Graph, packs: &[Pack], detail: Detail) -> Json {
+    let reg = g.registry();
+    let keys: Vec<Json> = reg
+        .keys
+        .iter()
+        .map(|k| {
+            let row = Json::obj()
+                .set("key", k.name.as_str())
+                .set_opt("description", k.description.clone())
+                // `null` and `[]` are different and both are meaning-bearing:
+                // null admits every declared scope, [] admits only the default
+                // one. Neither may collapse into the other, or into absence.
+                .set(
+                    "scopes",
+                    match &k.scopes {
+                        None => Json::Null,
+                        Some(list) => {
+                            Json::Arr(list.iter().map(|s| Json::from(s.as_str())).collect())
+                        }
+                    },
+                )
+                .set_opt("pack", key_pack(packs, &k.name).map(|s| s.to_string()));
+            match detail {
+                Detail::Names => row,
+                Detail::Full => {
+                    let decided: Vec<Json> = decided_at(g, &k.name)
+                        .into_iter()
+                        .map(|(scope, state, adrs)| {
+                            Json::obj()
+                                .set("scope", scope)
+                                .set("state", state)
+                                .set("adrs", adrs.iter().map(AdrId::as_str).collect::<Vec<_>>())
+                        })
+                        .collect();
+                    row.set("decided", decided)
+                }
+            }
+        })
+        .collect();
+    Json::obj()
+        .set(
+            "scopes",
+            reg.scopes.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        )
+        .set("keys", keys)
+}
+
+pub fn keys_text(g: &Graph, packs: &[Pack]) -> String {
+    let reg = g.registry();
+    let mut s = String::new();
+    s.push_str(&format!(
+        "{} keys · scopes: {}\n",
+        reg.keys.len(),
+        if reg.scopes.is_empty() {
+            "none declared".to_string()
+        } else {
+            reg.scopes.join(", ")
+        }
+    ));
+    for k in &reg.keys {
+        s.push('\n');
+        match &k.description {
+            Some(d) => s.push_str(&format!("{}   {}\n", k.name, d)),
+            None => s.push_str(&format!("{}\n", k.name)),
+        }
+        let where_ = match &k.scopes {
+            None => "every declared scope".to_string(),
+            Some(l) if l.is_empty() => "the default scope only".to_string(),
+            Some(l) => l.join(", "),
+        };
+        match key_pack(packs, &k.name) {
+            Some(p) => s.push_str(&format!(
+                "  answerable at {}   ·   declared by the `{}` pack\n",
+                where_, p
+            )),
+            None => s.push_str(&format!("  answerable at {}\n", where_)),
+        }
+        for (scope, state, adrs) in decided_at(g, &k.name) {
+            s.push_str(&format!(
+                "  {:<14} {}   {}\n",
+                state,
+                scope,
+                adrs.join(", ")
+            ));
+        }
+    }
+    s
+}
+
+// ------------------------------------------------------------------ rules
+//
+// A rule is listed, or fetched by id. The two are deliberately different sizes:
+// the list is one line each and carries no body, because it is what a caller
+// reads to find out what there is; the single rule carries everything, because
+// it is what a caller reads to find out why.
+
+/// Which rules to list.
+#[derive(Debug, Clone, Default)]
+pub struct Filter {
+    pub level: Option<Level>,
+    /// Only rules adopted by this record.
+    pub adopted_by: Option<String>,
+    /// Inactive rules too, each with the reason it is inactive.
+    pub all: bool,
+    /// Rules for every trait, not only the ones this repository's areas name
+    /// (SEMANTICS section 2.5).
+    pub all_traits: bool,
+    /// Only rules whose file declares `governs: <this>`.
+    pub governs: Option<Governs>,
+    /// Each rule with its body (`greentopo rules --full`).
+    pub full: bool,
+}
+
+/// The rules a filter selects, in the order they are printed.
+///
+/// Constraints first and ids within, because that is the order of obligation: a
+/// constraint is followed and a heuristic is argued about, and a caller reading
+/// a long list top-down meets the binding ones first. The corpus's own rule
+/// order is by id already (`load`), so this is one stable sort on the level.
+fn selected<'a>(g: &'a Graph, f: &Filter) -> (Vec<(&'a Rule, Option<String>)>, Option<Omitted>) {
+    let v: Vec<(&Rule, Option<String>)> = g
+        .corpus()
+        .rules
+        .iter()
+        .filter(|r| f.level.map_or(true, |l| l == r.level))
+        .filter(|r| {
+            f.adopted_by
+                .as_deref()
+                .map_or(true, |a| r.adopts.as_str() == a)
+        })
+        .filter(|rule| {
+            f.governs
+                .map_or(true, |wanted| rule.governs == Some(wanted))
+        })
+        .map(|r| (r, g.rule_reason(r)))
+        .filter(|(_, reason)| f.all || reason.is_none())
+        .collect();
+    // Traits last, so `omitted` counts what traits alone removed from what the
+    // caller would otherwise have been shown.
+    let scope = if f.all_traits {
+        Scope::All
+    } else {
+        Scope::for_query(g.registry(), &[])
+    };
+    let (kept, omitted) =
+        applicability::filter(g.registry(), &scope, v.iter().map(|(r, _)| *r).collect());
+    let mut v: Vec<(&Rule, Option<String>)> = v
+        .into_iter()
+        .filter(|(r, _)| kept.iter().any(|k| std::ptr::eq(*k, *r)))
+        .collect();
+    v.sort_by(|(x, _), (y, _)| x.level.cmp(&y.level).then(x.id.cmp(&y.id)));
+    (v, omitted)
+}
+
+/// `omitted` as JSON (SEMANTICS section 2.5): one shape on every surface.
+pub fn omitted_json(o: &Omitted) -> Json {
+    Json::obj()
+        .set("constraints", o.constraints)
+        .set("heuristics", o.heuristics)
+        .set(
+            "traits",
+            o.traits
+                .iter()
+                .map(|t| Json::from(t.as_str()))
+                .collect::<Vec<Json>>(),
+        )
+}
+
+/// The one-line omission notice, or `None` when nothing was hidden.
+pub fn omitted_notice(o: &Omitted) -> Option<String> {
+    if o.total() == 0 {
+        return None;
+    }
+    Some(format!(
+        "hidden by traits ({}): {} constraint(s), {} heuristic(s); `greentopo rules --all-traits` lists them",
+        if o.traits.is_empty() {
+            "none declared".to_string()
+        } else {
+            o.traits.join(", ")
+        },
+        o.constraints,
+        o.heuristics
+    ))
+}
+
+fn rule_row_json(r: &Rule, reason: &Option<String>) -> Json {
+    Json::obj()
+        .set("id", r.id.as_str())
+        .set("level", r.level.as_str())
+        .set("adopts", r.adopts.as_str())
+        .set("statement", r.statement.as_str())
+        .set_opt("source", r.source.clone())
+        .set_opt(
+            "applies",
+            (!r.applies.is_empty()).then(|| {
+                r.applies
+                    .iter()
+                    .map(|t| Json::from(t.as_str()))
+                    .collect::<Vec<Json>>()
+            }),
+        )
+        .set(
+            "governs",
+            r.governs
+                .map_or(Json::Null, |governs| Json::from(governs.as_str())),
+        )
+        .set("file", r.file.as_str())
+        .set_opt("pack", r.pack.clone())
+        .set("active", reason.is_none())
+        .set_opt("inactive_reason", reason.clone())
+}
+
+pub fn rules_json(g: &Graph, f: &Filter) -> Json {
+    let (rows, omitted) = selected(g, f);
+    let rows: Vec<Json> = rows
+        .iter()
+        .map(|(rule, reason)| {
+            let row = rule_row_json(rule, reason);
+            if f.full {
+                row.set("body", rule.body.as_str())
+            } else {
+                row
+            }
+        })
+        .collect();
+    Json::obj()
+        .set("rules", rows)
+        .set_opt("omitted", omitted.as_ref().map(omitted_json))
+}
+
+/// What traits hid from `rules_text`, for the caller to write to stderr.
+pub fn rules_omitted(g: &Graph, f: &Filter) -> Option<Omitted> {
+    selected(g, f).1
+}
+
+/// The listing, and nothing else: stdout stays pure rule lines, because the
+/// session hook counts this plain listing (`grep -c .`) to say how many rules
+/// its index stands for. The omission notice is the caller's to write, to
+/// stderr.
+pub fn rules_text(g: &Graph, f: &Filter) -> String {
+    let (rows, _) = selected(g, f);
+    if f.full {
+        let texts: Vec<String> = rows.iter().map(|(rule, _)| rule_text(g, rule)).collect();
+        return texts.join("\n---\n\n");
+    }
+    // Padded to the longest id in what is actually printed, so the statements
+    // line up and a short list is not padded to a long id it does not contain.
+    let width = rows.iter().map(|(r, _)| r.id.len()).max().unwrap_or(0);
+    let mut s = String::new();
+    for (r, reason) in &rows {
+        s.push_str(&format!(
+            "{:<10} {:<width$}  {}",
+            r.level.as_str(),
+            r.id,
+            r.statement,
+            width = width
+        ));
+        match reason {
+            Some(why) => s.push_str(&format!("   (inactive: {})\n", why)),
+            None => s.push('\n'),
+        }
+    }
+    s
+}
+
+/// The listing as an index: ids only, one line per prefix (the id up to its
+/// last `.`), so the session hook can put every constraint in front of an
+/// agent without its text (decisions ADR-0026). `greentopo rule <id>` has the text.
+///
+/// `width` wraps lines for a person at a terminal; `None` never wraps, so a
+/// script sees exactly one line per prefix.
+pub fn rules_index(g: &Graph, f: &Filter, width: Option<usize>) -> String {
+    let (rows, _) = selected(g, f);
+    index_lines(rows.iter().map(|(r, _)| r.id.as_str()), width)
+}
+
+/// Grouped in a map keyed by prefix rather than by runs of the sorted ids:
+/// plain id order puts `a.b-x` before `a.b.c` before `a.c`, and grouping runs
+/// would print the `a` prefix twice. The grammar requires a `.` in every id;
+/// one without stands alone on its line all the same.
+fn index_lines<'a>(ids: impl Iterator<Item = &'a str>, width: Option<usize>) -> String {
+    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for id in ids {
+        match id.rsplit_once('.') {
+            Some((prefix, rest)) => groups.entry(prefix).or_default().push(rest),
+            None => {
+                groups.entry(id).or_default();
+            }
+        }
+    }
+    let mut s = String::new();
+    for (prefix, rests) in groups {
+        if rests.is_empty() {
+            s.push_str(&format!("  {}\n", prefix));
+        } else {
+            s.push_str(&index_line(prefix, &rests, width));
+        }
+    }
+    s
+}
+
+/// One prefix's line. Wrapped lines break only after `, `, so an id is never
+/// split; an item that does not fit starts the next line, indented.
+fn index_line(prefix: &str, rests: &[&str], width: Option<usize>) -> String {
+    let mut out = String::new();
+    let mut line = format!("  {}: ", prefix);
+    for (i, rest) in rests.iter().enumerate() {
+        let last = i + 1 == rests.len();
+        let item = if last {
+            rest.to_string()
+        } else {
+            format!("{},", rest)
+        };
+        let fits = width.map_or(true, |w| line.chars().count() + item.chars().count() <= w);
+        if !fits && !line.trim_end().ends_with(':') {
+            out.push_str(line.trim_end());
+            out.push('\n');
+            line = String::from("      ");
+        }
+        line.push_str(&item);
+        if !last {
+            line.push(' ');
+        }
+    }
+    out.push_str(&line);
+    out.push('\n');
+    out
+}
+
+pub fn rule_json(g: &Graph, r: &Rule) -> Json {
+    let reason = g.rule_reason(r);
+    rule_row_json(r, &reason).set("body", r.body.as_str())
+}
+
+pub fn rule_text(g: &Graph, r: &Rule) -> String {
+    let mut s = format!("{}   {}\n", r.id, r.level);
+    let status = g
+        .corpus()
+        .adr(&r.adopts)
+        .map(|a| status_word(g.derived_status(a)))
+        .unwrap_or("unknown");
+    s.push_str(&format!("  adopts: {}   ({})\n", r.adopts, status));
+    if let Some(src) = &r.source {
+        s.push_str(&format!("  source: {}\n", src));
+    }
+    match &r.pack {
+        Some(p) => s.push_str(&format!(
+            "  file: {}   ·   vendored from the `{}` pack; change it there, not here\n",
+            r.file, p
+        )),
+        None => s.push_str(&format!("  file: {}\n", r.file)),
+    }
+    if let Some(why) = g.rule_reason(r) {
+        s.push_str(&format!("  inactive: {}\n", why));
+    }
+    s.push('\n');
+    s.push_str(&r.statement);
+    s.push('\n');
+    if !r.body.is_empty() {
+        s.push('\n');
+        s.push_str(&r.body);
+        s.push('\n');
+    }
+    s
+}
+
+/// The exit-7 object for a rule id the corpus does not declare.
+///
+/// The same shape as `show`'s, because it is the same question asked of a
+/// different namespace, and a caller that learned one should not have to learn
+/// a second.
+pub fn rule_unknown_json(id: &str, suggestion: Option<String>) -> Json {
+    Json::obj()
+        .set("state", "unknown")
+        .set("exit", 7)
+        .set("rule", id)
+        .set_opt("suggestion", suggestion)
+}
+
+/// The exit-7 object for an ADR id the corpus does not carry.
+///
+/// Byte-for-byte what `cmd_show` built inline. It lives here so the MCP server
+/// answers an unknown record the same way rather than inventing a second shape.
+pub fn show_unknown_json(id: &str, suggestion: Option<String>) -> Json {
+    Json::obj()
+        .set("state", "unknown")
+        .set("exit", 7)
+        .set("adr", id)
+        .set_opt("suggestion", suggestion)
+}
+
+/// The exit-7 object for a key or scope `history` cannot ask about.
+///
+/// `history` had **no** JSON for this at all: both rejections printed to stderr
+/// and returned 7, so `history --json` wrote nothing to stdout and left a
+/// machine caller with an exit code and silence, against section 12. The field
+/// names follow `resolve`'s unknown verdict, because it is the same question.
+pub fn history_unknown_json(
+    what: &str,
+    key: &str,
+    scope: &str,
+    suggestion: Option<String>,
+) -> Json {
+    Json::obj()
+        .set("state", "unknown")
+        .set("exit", 7)
+        .set("key", key)
+        .set("scope", scope)
+        .set("unknown", what)
+        .set_opt("suggestion", suggestion)
+}
+
+pub fn show_json(g: &Graph, adr: &Adr) -> Json {
+    let entries: Vec<Json> = g
+        .entry_status(adr)
+        .into_iter()
+        .map(|(e, is_head)| {
+            Json::obj()
+                .set("key", e.key.as_str())
+                .set("scope", e.scope.as_str())
+                .set("head", is_head)
+                .set_opt("choice", e.choice().map(|c| c.to_string()))
+                .set("retire", e.is_retire())
+        })
+        .collect();
+    Json::obj()
+        .set("adr", adr.id.as_str())
+        .set("file", adr.file.as_str())
+        .set(
+            "status",
+            if adr.status.is_accepted() {
+                "accepted"
+            } else {
+                "draft"
+            },
+        )
+        .set("derived_status", status_word(g.derived_status(adr)))
+        .set("decisions", entries)
+}
+
+pub fn show_text(g: &Graph, adr: &Adr) -> String {
+    let mut s = format!(
+        "{}   {}\n  file: {}\n",
+        adr.id,
+        status_word(g.derived_status(adr)),
+        adr.file
+    );
+    if adr.decisions.is_empty() {
+        s.push_str("  no decisions\n");
+        return s;
+    }
+    s.push('\n');
+    for (e, is_head) in g.entry_status(adr) {
+        let mark = if is_head { "head" } else { "superseded" };
+        let what = e.choice().unwrap_or("retired");
+        s.push_str(&format!("  {:<12} {}   {}\n", mark, e.slot(), what));
+    }
+    if matches!(g.derived_status(adr), DerivedStatus::PartiallySuperseded) {
+        s.push_str(
+            "\n  Partially superseded. The decisions marked head are still authoritative.\n",
+        );
+    }
+    s
+}
+
+/// The declared scopes that admit `key`, in declaration order.
+fn declared_scopes_admitting<'graph>(graph: &'graph Graph, key: &str) -> Vec<&'graph str> {
+    let reg = graph.registry();
+    reg.in_scopes
+        .iter()
+        .filter(|scope| reg.admits(key, scope))
+        .map(String::as_str)
+        .collect()
+}
+
+/// History with no `--scope`: the `*` chain, and one labelled chain per
+/// declared scope that admits the key. Unchanged when `in_scopes` is absent.
+pub fn history_default_json(graph: &Graph, key: &str) -> Json {
+    let star = Slot {
+        key,
+        scope: DEFAULT_SCOPE,
+    };
+    let json = history_json(graph, star, &graph.history(star));
+    let scopes = declared_scopes_admitting(graph, key);
+    if scopes.is_empty() {
+        return json;
+    }
+    json.set(
+        "chains",
+        scopes
+            .into_iter()
+            .map(|scope| {
+                let slot = Slot { key, scope };
+                history_json(graph, slot, &graph.history(slot))
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub fn history_default_text(graph: &Graph, key: &str) -> String {
+    let star = Slot {
+        key,
+        scope: DEFAULT_SCOPE,
+    };
+    let mut text = history_text(graph, star, &graph.history(star));
+    for scope in declared_scopes_admitting(graph, key) {
+        let slot = Slot { key, scope };
+        text.push('\n');
+        text.push_str(&history_text(graph, slot, &graph.history(slot)));
+    }
+    text
+}
+
+pub fn history_json(g: &Graph, slot: Slot<'_>, chain: &[&Adr]) -> Json {
+    let items: Vec<Json> = chain
+        .iter()
+        .map(|a| {
+            let e = a.entry_at(slot);
+            Json::obj()
+                .set("adr", a.id.as_str())
+                .set("head", g.heads(slot).iter().any(|(h, _)| h.id == a.id))
+                .set_opt("choice", e.and_then(|x| x.choice()).map(|c| c.to_string()))
+                .set("retire", e.map(|x| x.is_retire()).unwrap_or(false))
+        })
+        .collect();
+    Json::obj()
+        .set("key", slot.key)
+        .set("scope", slot.scope)
+        .set("history", items)
+}
+
+pub fn history_text(g: &Graph, slot: Slot<'_>, chain: &[&Adr]) -> String {
+    let mut s = format!("history of {}\n", slot);
+    if chain.is_empty() {
+        s.push_str("  nothing has decided this slot\n");
+        return s;
+    }
+    for a in chain {
+        let is_head = g.heads(slot).iter().any(|(h, _)| h.id == a.id);
+        let e = a.entry_at(slot);
+        let what = e.and_then(|x| x.choice()).unwrap_or("retired");
+        s.push_str(&format!(
+            "  {:<10} {}   {}\n",
+            if is_head { "head" } else { "history" },
+            a.id,
+            what
+        ));
+    }
+    s.push_str("\n  This is history. Only the head is authority.\n");
+    s
+}
+
+// ------------------------------------------------------------ per corpus
+//
+// One corpus, one command, every rendering at once. The CLI's single-corpus
+// paths keep their own code — their text goes to stderr on a miss and that is
+// a contract — but `--all-repos` and the MCP server both need the JSON, the
+// text and the exit of one corpus's answer without loading it twice, and this
+// is the one producer of that.
+
+/// Everything one corpus says in answer to one command.
+#[derive(Debug, Clone)]
+pub struct Reply {
+    pub json: Json,
+    pub text: String,
+    pub exit: i32,
+    /// Whether the tool surface reports this as a failure: a corpus that could
+    /// not answer at all, or a name it does not carry. Never a verdict.
+    pub is_error: bool,
+}
+
+pub fn resolve_in(loaded: &Loaded, key: &str, scope: Option<&str>) -> Reply {
+    match answer(&loaded.graph, &loaded.root, key, scope) {
+        Ok(a) => Reply {
+            json: a.json(),
+            text: a.text(),
+            exit: a.exit(),
+            is_error: false,
+        },
+        Err(e) => Reply {
+            json: error_json(3, &e.to_string(), &[]),
+            text: format!("greentopo: {}\n", e),
+            exit: 3,
+            is_error: true,
+        },
+    }
+}
+
+pub fn keys_in(l: &Loaded, detail: Detail) -> Reply {
+    Reply {
+        json: keys_json(&l.graph, &l.packs, detail),
+        text: keys_text(&l.graph, &l.packs),
+        exit: 0,
+        is_error: false,
+    }
+}
+
+pub fn heads_in(l: &Loaded) -> Reply {
+    Reply {
+        json: heads_json(&l.graph),
+        text: greentopo_core::project::render(&l.graph),
+        exit: 0,
+        is_error: false,
+    }
+}
+
+pub fn show_in(l: &Loaded, id: &str) -> Reply {
+    match l.graph.corpus().adr(id) {
+        Some(adr) => Reply {
+            json: show_json(&l.graph, adr),
+            text: show_text(&l.graph, adr),
+            exit: 0,
+            is_error: false,
+        },
+        None => {
+            let names: Vec<&str> = l
+                .graph
+                .corpus()
+                .adrs
+                .iter()
+                .map(|a| a.id.as_str())
+                .collect();
+            let sug = greentopo_core::model::suggest(id, names).map(str::to_string);
+            let mut text = format!("greentopo: no such ADR `{}`\n", id);
+            if let Some(s) = &sug {
+                text.push_str(&format!(
+                    "  did you mean {}? A suggestion is advisory.\n",
+                    s
+                ));
+            }
+            Reply {
+                json: show_unknown_json(id, sug),
+                text,
+                exit: 7,
+                is_error: true,
+            }
+        }
+    }
+}
+
+pub fn rules_in(l: &Loaded, f: &Filter) -> Reply {
+    Reply {
+        json: rules_json(&l.graph, f),
+        // A listing read by a person, per repository: the notice rides in the
+        // text here, because there is no separate stream to put it on.
+        text: {
+            let mut t = rules_text(&l.graph, f);
+            if let Some(n) = rules_omitted(&l.graph, f).as_ref().and_then(omitted_notice) {
+                t.push_str(&format!("({})\n", n));
+            }
+            t
+        },
+        // An empty list is an answer: this corpus adopts no rule matching that
+        // filter. Nothing failed, so nothing is reported as having failed.
+        exit: 0,
+        is_error: false,
+    }
+}
+
+pub fn rule_in(l: &Loaded, id: &str) -> Reply {
+    match l.graph.corpus().rule(id) {
+        Some(r) => Reply {
+            json: rule_json(&l.graph, r),
+            text: rule_text(&l.graph, r),
+            exit: 0,
+            is_error: false,
+        },
+        None => {
+            let names: Vec<&str> = l
+                .graph
+                .corpus()
+                .rules
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect();
+            let sug = greentopo_core::model::suggest(id, names).map(str::to_string);
+            let mut text = format!("greentopo: no such rule `{}`\n", id);
+            if let Some(s) = &sug {
+                text.push_str(&format!(
+                    "  did you mean `{}`? A suggestion is advisory.\n",
+                    s
+                ));
+            }
+            Reply {
+                json: rule_unknown_json(id, sug),
+                text,
+                exit: 7,
+                is_error: true,
+            }
+        }
+    }
+}
+
+pub fn history_in(loaded: &Loaded, key: &str, scope: Option<&str>) -> Reply {
+    let shown = scope.unwrap_or(DEFAULT_SCOPE);
+    let registry = loaded.graph.registry();
+    let unknown = |what: &str, names: Vec<&str>, needle: &str, line: String| {
+        let sug = greentopo_core::model::suggest(needle, names).map(str::to_string);
+        let mut text = line;
+        if let Some(g) = &sug {
+            text.push_str(&format!(
+                "  did you mean `{}`? A suggestion is advisory.\n",
+                g
+            ));
+        }
+        Reply {
+            json: history_unknown_json(what, key, shown, sug),
+            text,
+            exit: 7,
+            is_error: true,
+        }
+    };
+    if !registry.has_key(key) {
+        return unknown(
+            "key",
+            registry.keys.iter().map(|k| k.name.as_str()).collect(),
+            key,
+            format!("greentopo: `{}` is not a registered decision key\n", key),
+        );
+    }
+    let Some(scope) = scope else {
+        return Reply {
+            json: history_default_json(&loaded.graph, key),
+            text: history_default_text(&loaded.graph, key),
+            exit: 0,
+            is_error: false,
+        };
+    };
+    if !registry.has_scope(scope) {
+        return unknown(
+            "scope",
+            registry.scopes.iter().map(|s| s.as_str()).collect(),
+            scope,
+            format!("greentopo: `{}` is not a declared scope\n", scope),
+        );
+    }
+    let slot = Slot { key, scope };
+    let chain = loaded.graph.history(slot);
+    Reply {
+        json: history_json(&loaded.graph, slot, &chain),
+        text: history_text(&loaded.graph, slot, &chain),
+        exit: 0,
+        is_error: false,
+    }
+}
+
+// --------------------------------------------------------------- aggregate
+//
+// Several corpora, one command. An aggregate is a REPORT, not a verdict: its
+// exit code borrows `check`'s contract rather than `resolve`'s, and its JSON is
+// a map of each member's own payload, byte-equal to what that corpus answers
+// on its own. The CLI's `--all-repos` and the MCP server's no-`repo` call are
+// the same `Aggregate`; that is what keeps them from drifting.
+
+#[derive(Debug)]
+pub enum Outcome {
+    Answered(Reply),
+    /// The corpus would not load. Its error object stands where its answer
+    /// would; the report does not fail because one member did.
+    Unloadable {
+        json: Json,
+        message: String,
+    },
+}
+
+#[derive(Debug)]
+pub struct Member {
+    pub repo: Repo,
+    pub outcome: Outcome,
+}
+
+#[derive(Debug)]
+pub struct Aggregate {
+    pub members: Vec<Member>,
+    /// Worktrees left out because their parent is itself a member: the same
+    /// corpus would otherwise answer twice. Named, so the omission is visible.
+    pub excluded: Vec<(String, String)>,
+}
+
+/// Load each repository once and ask it the same question.
+///
+/// A linked worktree whose parent is among `repos` is excluded — it is a branch
+/// of a corpus already answering. One whose parent is not is the only
+/// representative of that repository and stays in.
+pub fn across(repos: &[Repo], f: impl Fn(&Loaded, &Repo) -> Reply) -> Aggregate {
+    let mut members = Vec::new();
+    let mut excluded = Vec::new();
+    for r in repos {
+        if let Some(parent) = r.worktree.as_ref().and_then(|w| w.parent.clone()) {
+            excluded.push((r.name.clone(), parent));
+            continue;
+        }
+        let outcome = match load::load(&r.root) {
+            Ok(l) => Outcome::Answered(f(&l, r)),
+            Err(e) => Outcome::Unloadable {
+                json: error_json(3, &e.to_string(), e.findings()),
+                message: e.to_string(),
+            },
+        };
+        members.push(Member {
+            repo: r.clone(),
+            outcome,
+        });
+    }
+    Aggregate { members, excluded }
+}
+
+impl Aggregate {
+    pub fn json(&self) -> Json {
+        let mut repos = Json::obj();
+        for m in &self.members {
+            let j = match &m.outcome {
+                Outcome::Answered(r) => r.json.clone(),
+                Outcome::Unloadable { json, .. } => json.clone(),
+            };
+            repos = repos.set(&m.repo.name, j);
+        }
+        let mut ex = Json::obj();
+        for (name, parent) in &self.excluded {
+            ex = ex.set(name, parent.as_str());
+        }
+        Json::obj()
+            .set("repos", repos)
+            .set("worktrees_excluded", ex)
+    }
+
+    pub fn text(&self) -> String {
+        let mut s = String::new();
+        for (i, m) in self.members.iter().enumerate() {
+            if i > 0 {
+                s.push('\n');
+            }
+            s.push_str(&format!("== {} ==\n", m.repo.name));
+            match &m.outcome {
+                Outcome::Answered(r) => s.push_str(&r.text),
+                Outcome::Unloadable { message, .. } => {
+                    s.push_str(&format!("greentopo: {}\n", message))
+                }
+            }
+        }
+        for (name, parent) in &self.excluded {
+            s.push_str(&format!("(excluded {}: a worktree of {})\n", name, parent));
+        }
+        s
+    }
+
+    /// `0` every member loaded and none exited 5 · `1` some member exited 5 or
+    /// did not load · `3` no member loaded. A report has no verdict of its own;
+    /// `contradiction` is the one member state a fleet-wide caller must not
+    /// miss, and a member that could not be read is a finding, not silence.
+    pub fn exit(&self) -> i32 {
+        let loaded = self
+            .members
+            .iter()
+            .filter(|m| matches!(m.outcome, Outcome::Answered(_)))
+            .count();
+        if loaded == 0 {
+            return 3;
+        }
+        let finding = self.members.iter().any(|m| match &m.outcome {
+            Outcome::Answered(r) => r.exit == 5,
+            Outcome::Unloadable { .. } => true,
+        });
+        if finding {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+// ------------------------------------------------------------------- repos
+
+fn repo_json(r: &Repo) -> Json {
+    let worktree = match &r.worktree {
+        None => Json::Null,
+        Some(w) => Json::obj()
+            .set("parent_root", w.parent_root.display().to_string())
+            .set(
+                "parent",
+                match &w.parent {
+                    Some(p) => Json::from(p.as_str()),
+                    None => Json::Null,
+                },
+            ),
+    };
+    Json::obj()
+        .set("name", r.name.as_str())
+        .set("root", r.root.display().to_string())
+        .set("worktree", worktree)
+        .set("shadowed", r.shadowed)
+}
+
+/// What discovery saw, and why each directory is or is not answering.
+pub fn repos_json(c: &Corpora) -> Json {
+    let (mode, skipped, warning) = match c {
+        Corpora::One {
+            skipped, warning, ..
+        } => ("corpus", skipped, warning.clone()),
+        Corpora::Many { skipped, .. } => ("workspace", skipped, None),
+    };
+    let repos: Vec<Json> = c.repos().into_iter().map(repo_json).collect();
+    let skipped: Vec<Json> = skipped
+        .iter()
+        .map(|s| {
+            Json::obj()
+                .set("name", s.name.as_str())
+                .set("reason", s.reason.as_str())
+        })
+        .collect();
+    Json::obj()
+        .set("mode", mode)
+        .set("repos", repos)
+        .set("skipped", skipped)
+        .set_opt("warning", warning)
+}
+
+pub fn repos_text(c: &Corpora) -> String {
+    let mut s = String::new();
+    let (mode, skipped, warning) = match c {
+        Corpora::One {
+            skipped, warning, ..
+        } => ("corpus", skipped, warning.as_deref()),
+        Corpora::Many { skipped, .. } => ("workspace", skipped, None),
+    };
+    let repos = c.repos();
+    s.push_str(&format!(
+        "{}: {} repositor{}\n",
+        mode,
+        repos.len(),
+        if repos.len() == 1 { "y" } else { "ies" }
+    ));
+    for r in repos {
+        let mut note = String::new();
+        if let Some(w) = &r.worktree {
+            note.push_str(&match &w.parent {
+                Some(p) => format!("   worktree of {}", p),
+                None => format!("   worktree of {}", w.parent_root.display()),
+            });
+        }
+        if r.shadowed {
+            note.push_str("   shadowed");
+        }
+        s.push_str(&format!("  {:<28} {}{}\n", r.name, r.root.display(), note));
+    }
+    if !skipped.is_empty() {
+        s.push_str("skipped:\n");
+        for k in skipped {
+            s.push_str(&format!("  {}: {}\n", k.name, k.reason));
+        }
+    }
+    if let Some(w) = warning {
+        s.push_str(&format!("warning: {}\n", w));
+    }
+    s
+}
+
+// ---------------------------------------------------------- resource names
+//
+// A repository name is a directory basename, and a valid basename may hold a
+// space, `#`, `%` or `?`. Inside a URI those are not text, so a name is
+// percent-encoded on the way out and decoded on the way in — and what comes
+// back is looked up against the discovered names, never used as a path.
+
+/// RFC 3986 unreserved characters pass; every other byte is `%XX`.
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// `None` for a malformed escape or bytes that are not UTF-8.
+pub fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_lines;
+
+    #[test]
+    fn index_groups_a_prefix_once_whatever_the_id_order() {
+        let got = index_lines(["a.b-x", "a.b.c", "a.c"].into_iter(), None);
+        assert_eq!(got, "  a: b-x, c\n  a.b: c\n");
+    }
+
+    #[test]
+    fn index_never_wraps_without_a_width() {
+        let ids: Vec<String> = (0..6)
+            .map(|i| format!("p.{}-{}", "x".repeat(20), i))
+            .collect();
+        let got = index_lines(ids.iter().map(String::as_str), None);
+        assert_eq!(got.lines().count(), 1);
+        assert!(got.len() > 80);
+    }
+
+    #[test]
+    fn index_wraps_after_a_comma_and_never_inside_an_id() {
+        let a = format!("p.{}", "a".repeat(40));
+        let b = format!("p.{}", "b".repeat(40));
+        let got = index_lines([a.as_str(), b.as_str()].into_iter(), Some(80));
+        let lines: Vec<&str> = got.lines().collect();
+        assert_eq!(lines.len(), 2, "{got}");
+        assert_eq!(lines[0], format!("  p: {},", "a".repeat(40)));
+        assert_eq!(lines[1].trim_start(), "b".repeat(40));
+        assert!(lines.iter().all(|l| l.chars().count() <= 80));
+    }
+
+    // The grammar forbids both inputs below; the renderer still prints
+    // something a reader can use rather than panicking or dropping them.
+    #[test]
+    fn index_prints_a_dotless_id_alone() {
+        assert_eq!(index_lines(["names"].into_iter(), Some(80)), "  names\n");
+    }
+
+    #[test]
+    fn index_keeps_an_id_wider_than_the_width_whole() {
+        let long = format!("p.{}", "z".repeat(100));
+        let got = index_lines(["p.a", long.as_str()].into_iter(), Some(80));
+        assert!(
+            got.lines().any(|l| l.trim_start() == "z".repeat(100)),
+            "{got}"
+        );
+    }
+}

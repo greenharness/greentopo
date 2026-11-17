@@ -1,36 +1,36 @@
 # Commands
 
-`aval --help` is the authoritative list; this page is the same thing with room
+`greentopo --help` is the authoritative list; this page is the same thing with room
 to say what each one is for.
 
 ## Asking
 
 | | |
 |---|---|
-| `aval resolve <key> [--scope S]` | the authoritative lookup: what is decided, and nothing else. With no `--scope`, it answers at the repository's `in_scopes` when `.adr.yaml` declares them (flag, then `in_scopes`, then `*`); JSON carries `scope_source` |
-| `aval relevant [--path P]… [--text W] [--changed] [--top N] [--scope S]` | which keys bear on what you are about to touch, ranked, each with its verdict. Advisory: it resolves nothing. See [which decisions bear on this change](relevance.md) |
-| `aval keys [--names]` | the vocabulary: every key, where it is answerable, where it is decided; `--names` leaves out where it is decided |
-| `aval show <ADR-NNNN>` | derived status of one record, including partial supersession |
-| `aval history <key> [--scope S]` | the chain, labelled as history rather than authority. With no `--scope`, the `*` chain plus one labelled chain per `in_scopes` scope |
-| `aval heads [--write\|--check]` | the projection; `--write` regenerates `HEADS.md`, `--check` says whether it is stale |
-| `aval rules [--level L] [--adopted-by R] [--all] [--all-traits] [--governs code] [--full]` | the rules the decisions have adopted, one line each; `--governs code` keeps rules whose file declares `governs: code`, `--full` prints each rule's text (not with `--index`). See [rules and traits](rules-and-traits.md) |
-| `aval rule <id>` | one rule, with its translation and why |
-| `aval traits [--summary\|--detect\|--check]` | what this repository says it is, and what its tracked files suggest |
+| `greentopo resolve <key> [--scope S]` | the authoritative lookup: what is decided, and nothing else. With no `--scope`, it answers at the repository's `in_scopes` when `.adr.yaml` declares them (flag, then `in_scopes`, then `*`); JSON carries `scope_source` |
+| `greentopo relevant [--path P]… [--text W] [--changed] [--top N] [--scope S]` | which keys bear on what you are about to touch, ranked, each with its verdict. Advisory: it resolves nothing. See [which decisions bear on this change](relevance.md) |
+| `greentopo keys [--names]` | the vocabulary: every key, where it is answerable, where it is decided; `--names` leaves out where it is decided |
+| `greentopo show <ADR-NNNN>` | derived status of one record, including partial supersession |
+| `greentopo history <key> [--scope S]` | the chain, labelled as history rather than authority. With no `--scope`, the `*` chain plus one labelled chain per `in_scopes` scope |
+| `greentopo heads [--write\|--check]` | the projection; `--write` regenerates `HEADS.md`, `--check` says whether it is stale |
+| `greentopo rules [--level L] [--adopted-by R] [--all] [--all-traits] [--governs code] [--full]` | the rules the decisions have adopted, one line each; `--governs code` keeps rules whose file declares `governs: code`, `--full` prints each rule's text (not with `--index`). See [rules and traits](rules-and-traits.md) |
+| `greentopo rule <id>` | one rule, with its translation and why |
+| `greentopo traits [--summary\|--detect\|--check]` | what this repository says it is, and what its tracked files suggest |
 
 ## Gating
 
 | | |
 |---|---|
-| `aval check` | every invariant; what the git hook and CI run |
-| `aval migrate <dir>` | report what converting a legacy ADR directory needs. It writes nothing |
+| `greentopo check` | every invariant; what the git hook and CI run |
+| `greentopo migrate <dir>` | report what converting a legacy ADR directory needs. It writes nothing |
 
 ## Agents
 
 | | |
 |---|---|
-| `aval hook install [--check]` | put the heads in front of an agent at session start; `--check` is the drift detector for CI |
-| `aval mcp` | serve the corpus as read-only MCP tools on stdio, until stdin closes |
-| `aval repos` | what is answering from here: this corpus, or every corpus one level down when there is none above |
+| `greentopo hook install [--check]` | put the heads in front of an agent at session start; `--check` is the drift detector for CI |
+| `greentopo mcp` | serve the corpus as read-only MCP tools on stdio, until stdin closes |
+| `greentopo repos` | what is answering from here: this corpus, or every corpus one level down when there is none above |
 
 Both are described in [in front of an agent](agents.md).
 
@@ -38,9 +38,9 @@ Both are described in [in front of an agent](agents.md).
 
 | | |
 |---|---|
-| `aval pack [--write\|--check]` | publish this corpus's declarations for others to read |
-| `aval add <source>… [--as NAME] [--dry-run]` | vendor another repository's declarations |
-| `aval add --check [--quiet] [--budget S]` | are the vendored packs still what their revisions name; `--quiet` speaks only when one is not, `--budget` kills a remote call that has not answered in S seconds |
+| `greentopo pack [--write\|--check]` | publish this corpus's declarations for others to read |
+| `greentopo add <source>… [--as NAME] [--dry-run]` | vendor another repository's declarations |
+| `greentopo add --check [--quiet] [--budget S]` | are the vendored packs still what their revisions name; `--quiet` speaks only when one is not, `--budget` kills a remote call that has not answered in S seconds |
 
 A source is `github:owner/repo`, `forgejo:host/owner/repo`, a git URL or a
 path, each optionally `@<rev>`; the commit id is what gets recorded. See
@@ -52,7 +52,7 @@ path, each optionally `@<rev>`; the commit id is what gets recorded. See
 |---|---|
 | `--json` | machine output on stdout, warnings suppressed |
 | `-C <dir>` | run as if started in `<dir>` |
-| `--all-repos` | on `resolve`, `keys`, `heads`, `history` and `rules`: ask every corpus `aval repos` lists, and report them keyed by name |
+| `--all-repos` | on `resolve`, `keys`, `heads`, `history` and `rules`: ask every corpus `greentopo repos` lists, and report them keyed by name |
 
 ## Exit codes
 
@@ -69,7 +69,7 @@ mcp install|uninstall  0 done, previewed, already in the wanted state, or (witho
          --check) no `claude` on PATH · 1 `claude` failed; --check: 1 not registered
          (install) or registered (uninstall) · 2 usage, incl. --write with
          --check · 3 --check, `claude` absent or could not answer
-hook uninstall  0 · 1 write failed; --check: 1 something of aval's is left
+hook uninstall  0 · 1 write failed; --check: 1 something of greentopo's is left
          · 2 usage, incl. --write with --check · 3 unreadable settings
 repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 ```
@@ -77,4 +77,4 @@ repos    0 · 2 usage · 3 nothing found, or the directory unreadable
 `--all-repos` exits `0` when every member loaded and none contradicts itself,
 `1` when one does or would not load, and `3` when none loaded. The full
 per-command contract is §14 of
-[`SEMANTICS.md`](https://github.com/fredericrous/aval/blob/main/SEMANTICS.md#14-exit-codes).
+[`SEMANTICS.md`](https://github.com/greenharness/greentopo/blob/main/SEMANTICS.md#14-exit-codes).

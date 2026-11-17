@@ -8,7 +8,7 @@ query, and the expected result. The harness rules are in the file's own
 applicability table of SEMANTICS section 2.5, case by case, including the
 `omitted` report every filtering surface carries.
 
-`relevant.json` is the second one, for the ranking `aval relevant` produces.
+`relevant.json` is the second one, for the ranking `greentopo relevant` produces.
 It is a separate file because it asserts a different kind of thing: not what is
 true, but what a *suggestion* says about it — that the order is reproducible
 byte for byte, and that the verdict beside each ranked key is the resolver's
