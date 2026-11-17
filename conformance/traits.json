@@ -23,7 +23,7 @@
     { "glob": "src/**", "path": "src", "matches": false },
     { "glob": "**", "path": "any/depth/at/all.txt", "matches": true },
     { "glob": "**/main.go", "path": "main.go", "matches": true },
-    { "glob": "cmd/*/main.go", "path": "cmd/aval/main.go", "matches": true },
+    { "glob": "cmd/*/main.go", "path": "cmd/greentopo/main.go", "matches": true },
     { "glob": "cmd/*/main.go", "path": "cmd/a/b/main.go", "matches": false },
     { "glob": "*", "path": "a/b", "matches": false },
     { "glob": "?.rs", "path": "a.rs", "matches": true },

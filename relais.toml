@@ -106,7 +106,7 @@ env = { GREENGATE_ON_BUSY = "wait" }
 # minimum_tier = "escalation"
 # review = "required"
 
-# Path-to-aval-key mappings. aval resolves exact keys; it has no
+# Path-to-greentopo-key mappings. greentopo resolves exact keys; it has no
 # source-impact analysis, so the mapping lives here (SPEC §7).
 # [[architecture.mapping]]
 # paths = ["crates/**"]

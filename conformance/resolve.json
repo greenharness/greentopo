@@ -1,6 +1,6 @@
 {
   "description": [
-    "Conformance battery for aval. Each case names a corpus under corpora/, a query,",
+    "Conformance battery for greentopo. Each case names a corpus under corpora/, a query,",
     "and the expected result. The harness MUST use `name` as the test name so a",
     "failure names the semantic case rather than an index, MUST throw on an unknown",
     "`query.command` rather than skipping it, and MUST assert that cases.length is at",

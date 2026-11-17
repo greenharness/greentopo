@@ -5,12 +5,12 @@ task: the way to learn that a decision governs the file you are about to edit
 is to already know its name. The alternative is `HEADS.md`, which is every
 decision the repository has ever made.
 
-`aval relevant` ranks the vocabulary against what you are about to touch. Run
+`greentopo relevant` ranks the vocabulary against what you are about to touch. Run
 in this repository, whose decisions are vendored from a fleet pack:
 
 ```console
-$ aval relevant --path crates/aval/src/mcp.rs --text "release a new version by pushing a tag"
-advisory   A ranking is a suggestion: it resolves nothing. Only `aval resolve <key>` answers.
+$ greentopo relevant --path crates/greentopo/src/mcp.rs --text "release a new version by pushing a tag"
+advisory   A ranking is a suggestion: it resolves nothing. Only `greentopo resolve <key>` answers.
 
    15.7899  release.trigger         active          decisions:ADR-0008   A pushed version tag, never a merge
     7.9137  release.version-scheme  active          decisions:ADR-0012   Semantic Versioning 2.0.0
@@ -20,9 +20,9 @@ rules mentioning the same words (advisory, and adopted by a record):
   constraint components.acyclic-dependencies       There are no cycles in the component dependency graph.
   …
 
-hidden by traits (cli): 5 constraint(s), 4 heuristic(s); `aval rules --all-traits` lists them
+hidden by traits (cli): 5 constraint(s), 4 heuristic(s); `greentopo rules --all-traits` lists them
 
-showing 2 keys of 5 matched, from 1 path and a text query. A ranking is a suggestion: it resolves nothing. Only `aval resolve <key>` answers.
+showing 2 keys of 5 matched, from 1 path and a text query. A ranking is a suggestion: it resolves nothing. Only `greentopo resolve <key>` answers.
 ```
 
 **This is retrieval, not resolution**, and the output says so on every run. The
@@ -32,8 +32,8 @@ makes an `undecided` row the interesting one — nobody decided it, and an agent
 that quietly fills the gap is doing the thing the corpus exists to prevent:
 
 ```console
-$ aval relevant --text "which forge hosts the repository"
-advisory   A ranking is a suggestion: it resolves nothing. Only `aval resolve <key>` answers.
+$ greentopo relevant --text "which forge hosts the repository"
+advisory   A ranking is a suggestion: it resolves nothing. Only `greentopo resolve <key>` answers.
 
     7.9168  forge.primary              undecided       no accepted decision for forge.primary
     2.3326  ci.system                  active          decisions:ADR-0017   GitHub Actions for an open-source repository, Forgejo Actions for a private one

@@ -1,11 +1,11 @@
 {
   "name": "__PKG__",
   "version": "__VERSION__",
-  "description": "The aval binary for __OS__/__CPU__",
-  "homepage": "https://github.com/fredericrous/aval#readme",
+  "description": "The greentopo binary for __OS__/__CPU__",
+  "homepage": "https://github.com/greenharness/greentopo#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fredericrous/aval.git"
+    "url": "git+https://github.com/greenharness/greentopo.git"
   },
   "license": "MIT",
   "author": "Frederic Rousseau",

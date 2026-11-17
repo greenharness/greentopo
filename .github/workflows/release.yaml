@@ -107,7 +107,7 @@ jobs:
         if: matrix.packages != ''
         # An apt mirror hanging `apt-get update` has cost releases on both
         # sides now. amont pinned the canonical archive because the Azure
-        # mirror stalled; aval's first release then failed because
+        # mirror stalled; greentopo's first release then failed because
         # archive.ubuntu.com was the one stalling — two targets timed out
         # after five minutes of `Ign:` lines.
         #
@@ -154,14 +154,14 @@ jobs:
           target_upper=$(echo "${{ matrix.target }}" | tr 'a-z-' 'A-Z_')
           echo "CARGO_TARGET_${target_upper}_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
 
-      - run: cargo build --release --target ${{ matrix.target }} --bin aval
+      - run: cargo build --release --target ${{ matrix.target }} --bin greentopo
 
       - name: Archive
         id: archive
         run: |
           set -euo pipefail
           version="${{ needs.guard.outputs.version }}"
-          name="aval-${version}-${{ matrix.target }}"
+          name="greentopo-${version}-${{ matrix.target }}"
           staging="dist/$name"
           mkdir -p "$staging"
           # SEMANTICS.md travels WITH the binary. It is the normative spec, and
@@ -169,11 +169,11 @@ jobs:
           # with an exit code and nothing that says what it means.
           cp README.md LICENSE SEMANTICS.md "$staging/"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "target/${{ matrix.target }}/release/aval.exe" "$staging/"
+            cp "target/${{ matrix.target }}/release/greentopo.exe" "$staging/"
             (cd dist && 7z a "$name.zip" "$name" > /dev/null)
             echo "asset=dist/$name.zip" >> "$GITHUB_OUTPUT"
           else
-            cp "target/${{ matrix.target }}/release/aval" "$staging/"
+            cp "target/${{ matrix.target }}/release/greentopo" "$staging/"
             (cd dist && tar czf "$name.tar.gz" "$name")
             echo "asset=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
           fi
@@ -186,7 +186,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ needs.guard.outputs.version }}"
-          bin="dist/aval-${version}-${{ matrix.target }}/aval"
+          bin="dist/greentopo-${version}-${{ matrix.target }}/greentopo"
           # An `if`, not `[ … ] && …`: under `set -e` a false test as the last
           # command of a line is a FAILING step, so the short form would abort
           # every non-Windows target here.
@@ -350,10 +350,10 @@ jobs:
             echo "| GitHub release | yes | nothing |"
             echo "| npm | ${{ vars.PUBLISH_NPM == 'true' && 'yes' || 'NO' }} | \`PUBLISH_NPM\` + \`NPM_TOKEN\` |"
             echo "| crates.io | ${{ vars.PUBLISH_CRATES == 'true' && 'yes' || 'NO' }} | \`PUBLISH_CRATES\` + \`CARGO_REGISTRY_TOKEN\` |"
-            echo "| homebrew tap | ${{ vars.PUBLISH_TAP == 'true' && 'yes' || 'NO' }} | \`PUBLISH_TAP\` + \`TAP_DEPLOY_KEY\` + a seeded \`Formula/aval.rb\` |"
+            echo "| homebrew tap | ${{ vars.PUBLISH_TAP == 'true' && 'yes' || 'NO' }} | \`PUBLISH_TAP\` + \`TAP_DEPLOY_KEY\` + a seeded \`Formula/greentopo.rb\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # crates.io, so `cargo install aval` works.
+  # crates.io, so `cargo install greentopo` works.
   #
   # Here rather than from a laptop for the usual reason a release belongs in CI:
   # the bytes published should come from a checkout of the tag, built by
@@ -362,11 +362,11 @@ jobs:
   #
   # `needs: build` on purpose. If a target does not compile, that is a release
   # nobody should be able to `cargo install` either — and crates.io versions are
-  # npm, so `npx aval-adr check` works without a Rust toolchain — the
+  # npm, so `npx @greenharness/greentopo check` works without a Rust toolchain — the
   # zero-install adoption path.
   #
   # Seven packages: six per-platform ones carrying the SAME binaries this release
-  # already published and checksummed, and `aval` itself, which is a JS shim and
+  # already published and checksummed, and `greentopo` itself, which is a JS shim and
   # six `optionalDependencies`. No `postinstall` anywhere, so this survives
   # `npm ci --ignore-scripts`, an offline cache and a pull-through registry —
   # see npm/README.md for why that ruled out the download-on-install shape.
@@ -380,7 +380,7 @@ jobs:
     # does not yet carry the credential this job needs. A release that failed
     # three jobs on a missing secret would read as a broken release rather than
     # as an unarmed channel. Set the variable when the secret is in place:
-    #     gh variable set PUBLISH_NPM -R fredericrous/aval --body true
+    #     gh variable set PUBLISH_NPM -R greenharness/greentopo --body true
     if: github.ref_type == 'tag' && vars.PUBLISH_NPM == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -416,7 +416,7 @@ jobs:
       - name: The tarball actually carries the binary
         run: |
           set -euo pipefail
-          cd dist/npm/@aval-adr/linux-x64-gnu
+          cd dist/npm/@greenharness/greentopo-linux-x64-gnu
           # Listed to a file, THEN grepped — never `tar … | grep -q`. `grep -q`
           # exits at the first match and closes the pipe, tar takes EPIPE, and
           # under `pipefail` that is a failed step reported as
@@ -424,26 +424,26 @@ jobs:
           # so it passed on macOS locally and failed the release on ubuntu.
           npm pack --silent > /tmp/packed
           tar tzf "$(cat /tmp/packed)" > /tmp/contents
-          grep -qx 'package/bin/aval' /tmp/contents
-          echo "the linux-x64-gnu tarball carries bin/aval"
+          grep -qx 'package/bin/greentopo' /tmp/contents
+          echo "the linux-x64-gnu tarball carries bin/greentopo"
 
           # And the ROOT package, which is the one people install. Checking a
           # platform package alone is what let a broken root ship for four
-          # releases: `aval.js` requires `./native.js`, the packer staged
+          # releases: `greentopo.js` requires `./native.js`, the packer staged
           # only the first, and the result installed cleanly and died on
           # first use with MODULE_NOT_FOUND.
-          cd "$GITHUB_WORKSPACE/dist/npm/aval-adr"
+          cd "$GITHUB_WORKSPACE/dist/npm/@greenharness/greentopo"
           npm pack --silent > /tmp/packed-root
           tar tzf "$(cat /tmp/packed-root)" > /tmp/root-contents
-          for f in package/bin/aval.js package/bin/native.js; do
+          for f in package/bin/greentopo.js package/bin/native.js; do
             grep -qx "$f" /tmp/root-contents || {
-              echo "::error::the aval tarball is missing $f"
+              echo "::error::the greentopo tarball is missing $f"
               echo "::error::it carries:"; sed 's/^/::error::  /' /tmp/root-contents
               exit 1; }
           done
-          echo "the aval tarball carries both wrappers"
+          echo "the greentopo tarball carries both wrappers"
 
-      - name: Publish platform packages, then aval
+      - name: Publish platform packages, then greentopo
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -467,9 +467,9 @@ jobs:
             exit 1
           fi
 
-          # ORDER IS LOAD-BEARING. `aval` declares each platform package at this
+          # ORDER IS LOAD-BEARING. `greentopo` declares each platform package at this
           # exact version, and npm validates that a dependency version exists at
-          # publish time — so publishing `aval` first fails the whole job, and
+          # publish time — so publishing `greentopo` first fails the whole job, and
           # publishing it first SUCCESSFULLY would be worse: an immutable version
           # nobody can install.
           #
@@ -507,9 +507,9 @@ jobs:
           # AN EXPLICIT LIST, NOT A GLOB.
           #
           # The platform packages are scoped now, so they lay out under
-          # `dist/npm/@aval-adr/…` and `dist/npm/aval-adr-*` matches nothing
+          # `dist/npm/@greenharness/greentopo-…` and `dist/npm/@greenharness/greentopo-*` matches nothing
           # at all — the loop would silently publish ZERO platform packages
-          # and then publish `aval` against six dependencies that do not
+          # and then publish `greentopo` against six dependencies that do not
           # exist. npm versions are immutable, so that is a version bump to
           # recover from, not a re-run.
           #
@@ -518,12 +518,12 @@ jobs:
           # but care. `npm-pack.sh`'s TARGETS table is the source of truth,
           # and `npm_packaging.rs` asserts this list agrees with it.
           for t in darwin-arm64 darwin-x64 linux-arm64-gnu linux-x64-gnu linux-x64-musl win32-x64; do
-            publish "dist/npm/@aval-adr/$t"
+            publish "dist/npm/@greenharness/greentopo-$t"
           done
-          publish dist/npm/aval-adr
+          publish dist/npm/@greenharness/greentopo
 
           echo "### Published to npm" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`npm i -D aval\` — v${{ needs.guard.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`npm i -D greentopo\` — v${{ needs.guard.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
 
   # IMMUTABLE, so a bad publish can only be yanked and superseded, never fixed.
   # The binaries are the cheaper thing to get wrong.
@@ -541,15 +541,15 @@ jobs:
     # does not yet carry the credential this job needs. A release that failed
     # three jobs on a missing secret would read as a broken release rather than
     # as an unarmed channel. Set the variable when the secret is in place:
-    #     gh variable set PUBLISH_CRATES -R fredericrous/aval --body true
+    #     gh variable set PUBLISH_CRATES -R greenharness/greentopo --body true
     if: github.ref_type == 'tag' && vars.PUBLISH_CRATES == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      # Order is a dependency order, not a preference: `aval` depends on
-      # `aval-core` and crates.io resolves that by VERSION, so the
+      # Order is a dependency order, not a preference: `greentopo` depends on
+      # `greentopo-core` and crates.io resolves that by VERSION, so the
       # dependency has to exist in the index before the dependent is accepted.
       #
       # Each publish is skipped when that exact version is already on crates.io,
@@ -575,13 +575,13 @@ jobs:
           #     "Published X". Polling on top of that was redundant.
           #   * the crates.io API rate-limits datacenter IPs, so the poll saw
           #     non-200 for a crate that had just published successfully and
-          #     failed the job ten minutes later. aval-core 1.0.1 was
+          #     failed the job ten minutes later. greentopo-core 1.0.1 was
           #     live the whole time.
           #
           # Idempotency comes from cargo's own answer instead. Re-running a
           # release must not fail on a crate that is already up, and "already
           # uploaded" is exactly that answer — anything else is a real failure.
-          for crate in aval-core aval; do
+          for crate in greentopo-core greentopo; do
             echo "→ publishing $crate $VERSION"
             if out=$(cargo publish -p "$crate" 2>&1); then
               printf '%s\n' "$out"
@@ -597,7 +597,7 @@ jobs:
           done
 
           echo "### Published to crates.io" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`cargo install aval\` — v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`cargo install greentopo\` — v$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   # The release's last manual step, retired. The tap formula was bumped by
   # hand four times in three days — copy a version, copy four sha256 lines,
@@ -618,14 +618,14 @@ jobs:
     # push step's nothing-to-commit path makes that resume a no-op when the
     # tap already carries the version.
     #
-    # NOTE: seed `Formula/aval.rb` in the tap before arming this. bump-tap.py
+    # NOTE: seed `Formula/greentopo.rb` in the tap before arming this. bump-tap.py
     # REWRITES a formula; it does not create one, and it asserts four url/sha
     # pairs are present rather than hoping a sed matched.
     # Gated on a repository VARIABLE, not just the tag, because this repository
     # does not yet carry the credential this job needs. A release that failed
     # three jobs on a missing secret would read as a broken release rather than
     # as an unarmed channel. Set the variable when the secret is in place:
-    #     gh variable set PUBLISH_TAP -R fredericrous/aval --body true
+    #     gh variable set PUBLISH_TAP -R greenharness/greentopo --body true
     if: github.ref_type == 'tag' && vars.PUBLISH_TAP == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -660,8 +660,8 @@ jobs:
       - name: Rewrite the formula
         run: |
           set -euo pipefail
-          python3 scripts/bump-tap.py "$VERSION" SHA256SUMS tap/Formula/aval.rb
-          ruby -c tap/Formula/aval.rb
+          python3 scripts/bump-tap.py "$VERSION" SHA256SUMS tap/Formula/greentopo.rb
+          ruby -c tap/Formula/greentopo.rb
 
       - name: Push
         run: |
@@ -673,11 +673,11 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/aval.rb
-          git commit -m "chore: aval $VERSION"
+          git add Formula/greentopo.rb
+          git commit -m "chore: greentopo $VERSION"
           git push origin HEAD
           echo "### Published to the homebrew tap" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`brew upgrade fredericrous/tap/aval\` — v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`brew upgrade fredericrous/tap/greentopo\` — v$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   # The only thing anywhere that runs the formula.
   #
@@ -722,21 +722,21 @@ jobs:
         run: |
           set -euo pipefail
           brew tap fredericrous/tap
-          brew install fredericrous/tap/aval
+          brew install fredericrous/tap/greentopo
 
       - name: The installed binaries are the version just published
         run: |
           set -euo pipefail
-          aval --version | tee /tmp/v
-          grep -qx "aval $VERSION" /tmp/v
+          greentopo --version | tee /tmp/v
+          grep -qx "greentopo $VERSION" /tmp/v
           
       # The formula's own test block, which is the only place the INSTALLED
       # artifact is exercised — and which referenced the departed binary too,
       # so it would have failed for the same reason had anyone run it.
       - name: brew test
-        run: brew test fredericrous/tap/aval
+        run: brew test fredericrous/tap/greentopo
 
       - name: Say so
         run: |
           echo "### brew install verified" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`brew install fredericrous/tap/aval\` produces v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`brew install fredericrous/tap/greentopo\` produces v$VERSION" >> "$GITHUB_STEP_SUMMARY"

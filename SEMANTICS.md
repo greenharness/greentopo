@@ -1,10 +1,10 @@
-# `aval` — normative semantics
+# `greentopo` — normative semantics
 
 Version 1.2.0. This document is the specification. Where an
 implementation and this document disagree, this document is right and the
 implementation is a bug.
 
-`aval` answers one question: **what is the current decision for a given
+`greentopo` answers one question: **what is the current decision for a given
 decision key?** It derives that answer from a corpus of Architecture Decision
 Records. It never stores the answer.
 
@@ -177,14 +177,14 @@ packs:
   requotes a generated file turns it into a file that gets hand-edited.
   `.pack` is claimed by no formatter. Nothing reads the extension — a `.yaml`
   written by an earlier version keeps loading, so a listed path is never wrong
-  for its extension — and `aval add` migrates such a file, moving it and
+  for its extension — and `greentopo add` migrates such a file, moving it and
   rewriting the one registry line that names it.
-- In a repository with no registry, `aval add` writes a starter one at the
+- In a repository with no registry, `greentopo add` writes a starter one at the
   repository's root — git's top level, else the directory asked — declaring
   nothing, and lists the pack in it. Adopting another repository's decisions
   is the first thing a repository does with this tool, so "no registry yet"
   is the ordinary case, not a refusal. `--dry-run` says it would.
-- A pack file is written by `aval add` and MUST NOT be edited by hand. What it
+- A pack file is written by `greentopo add` and MUST NOT be edited by hand. What it
   **declares** is what the producing repository published at the recorded
   commit, under a comment banner naming the source, the revision asked for,
   and the commit id that revision resolved to.
@@ -196,7 +196,7 @@ packs:
   they did not make. Comparison is of parsed values, ignoring line numbers,
   comments, quoting and blank lines; the same move §12.2 makes for `HEADS.md`.
   What "MUST NOT be edited by hand" forbids is changing what the file
-  *declares*, and `aval add --check` reports that as `edited`.
+  *declares*, and `greentopo add --check` reports that as `edited`.
 - The **pack name** is the filename without its extension. It MUST satisfy the
   slug grammar of §3.8 and MUST NOT contain `:`. Two packs MUST NOT share a
   name. The name is carried in the path rather than in a second field, because
@@ -277,7 +277,7 @@ change an answer, and the place to catch that is the pull request that adds the
 file — which is where a change of architectural direction belongs.
 
 **"Inert" scopes to execution, and no further.** A pack's text reaches an
-agent's context: the session-start hook prints it, and `aval mcp` returns it.
+agent's context: the session-start hook prints it, and `greentopo mcp` returns it.
 Text in a model's context is not inert in the way a file on disk is — it is the
 one input that acts. So a pack is a path by which another repository's prose
 reaches a reader who was told, by this tool, that it is settled.
@@ -304,11 +304,11 @@ are good ones.
 #### Staleness is reported, never repaired
 
 A vendored pack that is behind answers `active` with a decision that was
-superseded, which is the failure this tool exists to prevent. `aval add
+superseded, which is the failure this tool exists to prevent. `greentopo add
 --check` re-resolves each recorded revision and reports whether it still names
 the recorded commit. `behind` means the revision names a commit that publishes
 different declarations: when the commit moved but the declarations did not
-(the top-level `aval` generator version aside), the pack is `current`, and the
+(the top-level `greentopo` generator version aside), the pack is `current`, and the
 line says which commit the revision now names. A published file that cannot be
 fetched or parsed after a move is `behind`, because the revision already
 answered that it moved.
@@ -318,7 +318,7 @@ commit, and the vendored file no longer declares what that commit published.
 Re-resolving alone never asked that question, and the answer it missed is the
 same failure from the other side — a decision this repository believes another
 one made, that nobody made. It is counted with `behind` because one command
-fixes both: `aval add` writes what the source published. The comparison is
+fixes both: `greentopo add` writes what the source published. The comparison is
 declarational, so a file a formatter reformatted is `current`, not `edited`.
 The check is asked only while the revision still names the recorded commit:
 once it names another, the comparison is against what that commit publishes,
@@ -331,7 +331,7 @@ the ordinary case, not a corner of it: the corpus this was built for is private
 on one forge and read by repositories on another.
 
 The consequence is a real cost and is stated rather than hidden: when a fleet
-decision changes, each consumer is updated by a person running `aval add`
+decision changes, each consumer is updated by a person running `greentopo add`
 again, and reading the diff.
 
 ### 2.4 Rules
@@ -359,8 +359,8 @@ Two levels, and the difference is what a reviewer does with them:
 
 - `constraint` — followed; a review blocks on it. The session hook names every
   active constraint, because a constraint nobody is shown is one nobody
-  follows. From 1.9.0 it names each by id only, grouped by prefix (`aval
-  rules --index`), and `aval rule <id>` has the text: always-on text is an
+  follows. From 1.9.0 it names each by id only, grouped by prefix (`greentopo
+  rules --index`), and `greentopo rule <id>` has the text: always-on text is an
   index, and the detail is fetched when a task needs it.
 - `heuristic` — followed unless a reviewer argues why not, **in that place**.
   Fetched on demand, never injected: a heuristic printed at every session start
@@ -368,7 +368,7 @@ Two levels, and the difference is what a reviewer does with them:
 
 **Precedence**, highest first, stated here and printed by the hook:
 
-1. a decision at the scope asked — `aval resolve <key> --scope S`;
+1. a decision at the scope asked — `greentopo resolve <key> --scope S`;
 2. the default-scope decision it inherits from (§5);
 3. an adopted rule;
 4. the source a rule cites — a book, a specification — as **explanation only**.
@@ -383,11 +383,11 @@ is not citing an authority, it is **contradicting a decision**.
 A rule file MAY carry `governs: code`, the only value: its rules govern how
 code is written, as opposed to how a process runs. Absent means not code. Any
 other value is a Layer A error naming the field. The field travels in a pack.
-`aval rules --governs code` lists only those rules (after the trait filter), and
-`aval rules --full` prints each rule's body as `aval rule <id>` does, rules
+`greentopo rules --governs code` lists only those rules (after the trait filter), and
+`greentopo rules --full` prints each rule's body as `greentopo rule <id>` does, rules
 separated by a blank line and a `---` line; `--json` carries `governs` on every
 rule and `--full` adds `body`. `--full` cannot be combined with `--index`. The
-`aval_rules` tool takes `governs` and `full` with the same meaning.
+`greentopo_rules` tool takes `governs` and `full` with the same meaning.
 
 #### Rule files
 
@@ -439,11 +439,11 @@ included.
 - The **statement** is the first paragraph under the heading: the first
   non-blank line and every line up to the first blank one, joined with single
   spaces. It MUST be non-empty and printable (§3.7). It is the one line
-  `aval rules` prints, so it is joined rather than kept as written — a
+  `greentopo rules` prints, so it is joined rather than kept as written — a
   hard wrap is typography, not part of what the rule says.
 - The **body** is everything after that paragraph up to the next rule heading
   or end of file, trimmed. It may be empty, and it MUST be printable (§3.7):
-  it travels in a pack and reaches an agent through `aval rule`, so the text a
+  it travels in a pack and reaches an agent through `greentopo rule`, so the text a
   reviewer reads has to be the text a model receives.
 - A `## ` line that does not match the grammar is a **parse error naming the
   line**, and so is a `# ` heading after the first rule. Neither may quietly
@@ -475,7 +475,7 @@ about how much a review blocks, which is exactly what a pull request is for.
 
 #### Rules in a pack
 
-`aval pack --write` emits a `rules:` section after `records:`, sorted by id,
+`greentopo pack --write` emits a `rules:` section after `records:`, sorted by id,
 each rule carrying its statement **and its body**. A rule body is the one piece
 of prose a pack carries, and it is not a counter-example to "a pack MUST NOT
 carry a record's body": it is a declaration in its own right, it is printed
@@ -501,7 +501,7 @@ before it.
 **Activity is not a check.** A rule adopted by a superseded record is
 **inactive, not wrong** — being replaced with its record is the ordinary end of
 a rule's life, and reporting it would ask an author to delete the history of
-how the estate used to be written. `aval rules --all` shows it with the reason;
+how the estate used to be written. `greentopo rules --all` shows it with the reason;
 `check` says nothing.
 
 Layer C's `links-resolve` runs over rule files: they are documents of this
@@ -570,7 +570,7 @@ a name with T. R is the union of the traits of every declared area.
 | Situation | Traits used |
 |---|---|
 | no `areas`, or an empty map | nothing is filtered — selection and text output are exactly as without this section |
-| no path (the hook, `aval rules`, the `aval_rules` tool) | R |
+| no path (the hook, `greentopo rules`, the `greentopo_rules` tool) | R |
 | a path matching several areas | the union of their traits |
 | a path matching an area that declares `[]` | the empty set: only untargeted rules apply there |
 | a path matching no area | nothing is filtered for that path |
@@ -581,7 +581,7 @@ An uncovered path filters nothing on purpose. Declaring `web/**` must not
 silently remove rules from everything else in the repository.
 
 **Filtering is display, never activity.** A rule hidden by traits is still
-active (§2.4). `aval rule <id>` explains it whatever the areas say, and `aval
+active (§2.4). `greentopo rule <id>` explains it whatever the areas say, and `greentopo
 rules --all-traits` lists everything. **Every surface that filters reports what
 it hid**, as `omitted`: the number of constraints and of heuristics removed by
 traits alone, counted after every other filter the caller asked for (level,
@@ -615,7 +615,7 @@ The conformance battery pins every case above.
 
 #### Detection is advisory
 
-`aval traits --detect` proposes areas from the files git tracks, and `aval
+`greentopo traits --detect` proposes areas from the files git tracks, and `greentopo
 traits --check` compares that proposal with the declaration. Neither filters
 anything: only a declaration does.
 
@@ -639,7 +639,7 @@ The detector set, what each detector looks for, and the findings `--check`
 prints are **advisory and unpinned** (§15). What `--check` pins is the meaning
 of its exit codes.
 
-`aval traits --summary` is what the hook prints. It reads only the corpus —
+`greentopo traits --summary` is what the hook prints. It reads only the corpus —
 registry, records, rules, packs — with no git, no detection and no
 subprocess, and works outside a repository. It prints whenever `areas`
 is declared, even when nothing is hidden, so an area that hides everything is
@@ -965,7 +965,7 @@ resolve_default(key):
 - `check` reports a warning (`in-scopes-conflict`, in `warnings` under
   `--json`) for a key more than one declared scope answers. A warning never
   changes the exit code.
-- `aval traits --summary` names the declared scopes.
+- `greentopo traits --summary` names the declared scopes.
 
 Exit codes are those of `resolve` (§14): a default-scope contradiction is 5.
 
@@ -1173,7 +1173,7 @@ answering a question.
 | Check | Reports |
 |---|---|
 | `heads-fresh` | `HEADS.md` not matching the projection after canonicalisation (§12.2) |
-| `pack-fresh` | a published `aval.pack` not matching the declarations this corpus states (§2.3) |
+| `pack-fresh` | a published `greentopo.pack` not matching the declarations this corpus states (§2.3) |
 | `links-resolve` | an unpinned citation that does not resolve (§11), in a record or in a rules file |
 | `status-single-source` | a prose status line claiming approval the frontmatter already owns |
 | `no-manual-index` | a hand-maintained ADR index table |
@@ -1391,52 +1391,52 @@ Low codes follow the duro CLI. Verdicts start at 4.
 
 | Command | Layers | Exit codes |
 |---|---|---|
-| `aval check` | A + B + C | `0` clean · `1` findings · `2` usage · `3` unreadable |
-| `aval resolve` | A then B | the full table above |
-| `aval relevant` | A, then B per ranked key | `0` always, whatever it ranks · `2` usage, including a `--scope` the corpus does not declare · `3` unreadable |
-| `aval heads --write` | A | `0` · `1` write failed · `2` · `3` |
-| `aval heads --check` | A + C | `0` fresh · `1` stale · `2` · `3` |
-| `aval show` | A | `0` · `2` · `3` · `7` |
-| `aval history` | A | `0` · `2` · `3` · `7` |
-| `aval hook install` | — | `0` · `1` write failed · `2` · `3` unreadable settings |
-| `aval hook install --check` | — | `0` wired, and the script current or from a newer aval · `1` stale · `2` · `3` |
-| `aval mcp install` / `uninstall` | — | `0` done, previewed, already in the wanted state (`--write` when registered / not registered), or, without `--check`, no `claude` on PATH · `1` `claude` failed · `2` usage, including `--write` with `--check` · `3` with `--check`, `claude` is absent or could not say whether aval is registered |
-| `aval mcp install --check` / `uninstall --check` | — | `0` registered (install) / not registered (uninstall) · `1` the opposite · `2` · `3` `claude` is absent (line on stderr) or could not answer |
-| `aval hook uninstall` | — | `0` · `1` write failed · `2` usage, including `--write` with `--check` · `3` unreadable settings |
-| `aval hook uninstall --check` | — | `0` nothing of aval's left · `1` something is · `2` · `3` |
-| `aval pack` | A | `0` · `2` · `3` |
-| `aval pack --write` | A | `0` · `1` write failed · `2` · `3` |
-| `aval pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
-| `aval add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
-| `aval add --check [--quiet] [--budget S]` | A | `0` current or unknown · `1` behind or edited · `2` · `3` |
-| `aval keys` | A | `0` · `2` · `3` |
-| `aval rules` | A | `0` · `2` · `3` |
-| `aval traits [--summary]` | A | `0` · `2` · `3` |
-| `aval traits --detect` | A | `0` · `2` · `3` unreadable corpus, or could not inspect |
-| `aval traits --check` | A | `0` inspected, nothing to report · `1` findings · `2` · `3` unreadable corpus, or could not inspect |
-| `aval rule` | A | `0` found · `2` · `3` · `7` unknown |
-| `aval repos` | — | `0` · `2` · `3` nothing found, or the directory unreadable |
+| `greentopo check` | A + B + C | `0` clean · `1` findings · `2` usage · `3` unreadable |
+| `greentopo resolve` | A then B | the full table above |
+| `greentopo relevant` | A, then B per ranked key | `0` always, whatever it ranks · `2` usage, including a `--scope` the corpus does not declare · `3` unreadable |
+| `greentopo heads --write` | A | `0` · `1` write failed · `2` · `3` |
+| `greentopo heads --check` | A + C | `0` fresh · `1` stale · `2` · `3` |
+| `greentopo show` | A | `0` · `2` · `3` · `7` |
+| `greentopo history` | A | `0` · `2` · `3` · `7` |
+| `greentopo hook install` | — | `0` · `1` write failed · `2` · `3` unreadable settings |
+| `greentopo hook install --check` | — | `0` wired, and the script current or from a newer greentopo · `1` stale · `2` · `3` |
+| `greentopo mcp install` / `uninstall` | — | `0` done, previewed, already in the wanted state (`--write` when registered / not registered), or, without `--check`, no `claude` on PATH · `1` `claude` failed · `2` usage, including `--write` with `--check` · `3` with `--check`, `claude` is absent or could not say whether greentopo is registered |
+| `greentopo mcp install --check` / `uninstall --check` | — | `0` registered (install) / not registered (uninstall) · `1` the opposite · `2` · `3` `claude` is absent (line on stderr) or could not answer |
+| `greentopo hook uninstall` | — | `0` · `1` write failed · `2` usage, including `--write` with `--check` · `3` unreadable settings |
+| `greentopo hook uninstall --check` | — | `0` nothing of greentopo's left · `1` something is · `2` · `3` |
+| `greentopo pack` | A | `0` · `2` · `3` |
+| `greentopo pack --write` | A | `0` · `1` write failed · `2` · `3` |
+| `greentopo pack --check` | A + C | `0` fresh or not publishing · `1` stale · `2` · `3` |
+| `greentopo add` | A | `0` · `1` unreachable, ambiguous, or refused · `2` · `3` |
+| `greentopo add --check [--quiet] [--budget S]` | A | `0` current or unknown · `1` behind or edited · `2` · `3` |
+| `greentopo keys` | A | `0` · `2` · `3` |
+| `greentopo rules` | A | `0` · `2` · `3` |
+| `greentopo traits [--summary]` | A | `0` · `2` · `3` |
+| `greentopo traits --detect` | A | `0` · `2` · `3` unreadable corpus, or could not inspect |
+| `greentopo traits --check` | A | `0` inspected, nothing to report · `1` findings · `2` · `3` unreadable corpus, or could not inspect |
+| `greentopo rule` | A | `0` found · `2` · `3` · `7` unknown |
+| `greentopo repos` | — | `0` · `2` · `3` nothing found, or the directory unreadable |
 | `--all-repos` on `resolve` / `keys` / `heads` / `history` / `rules` | A per member | `0` every member loaded, none exited 5 · `1` a member exited 5 or did not load · `2` with `--write`, `--check`, or on `show` or `rule` · `3` no member loaded |
-| `aval mcp` | — at startup | `0` stdin closed · `1` transport failure · `2` |
+| `greentopo mcp` | — at startup | `0` stdin closed · `1` transport failure · `2` |
 
 `hook install` reads no corpus and touches no layer. It wires a session-start
 hook that runs `heads`; whether the corpus resolves is that command's business,
-and the generated script stays **silent** when aval is not installed, because a
+and the generated script stays **silent** when greentopo is not installed, because a
 session must not fail over a tool the person who started it has not installed.
-When aval *is* installed and older than the aval that wrote the script, the
+When greentopo *is* installed and older than the greentopo that wrote the script, the
 script's first line says so, loudly, and names the upgrade: a registry written
-for a newer aval is refused by an older one (§15), and a session that silently
+for a newer greentopo is refused by an older one (§15), and a session that silently
 lost every decision would read as a corpus that has none. When `heads` fails
-for any other reason the script prints one line saying it did and to run `aval
-check`, and the session continues. From 1.7.0 the script also prints `aval
+for any other reason the script prints one line saying it did and to run `greentopo
+check`, and the session continues. From 1.7.0 the script also prints `greentopo
 traits --summary` (§2.5), and reads rules with their stderr discarded, so the
 omission notice never becomes a counted rule line. From 1.9.0 the script prints
-the constraints as `aval rules --level constraint --index`, counts them from
+the constraints as `greentopo rules --level constraint --index`, counts them from
 the plain listing (an index line holds a whole prefix), and falls back to one
-full id per line when an older aval refuses `--index`, so an older binary
+full id per line when an older greentopo refuses `--index`, so an older binary
 never silently drops the constraints.
 
-`aval rules --index` takes `--level`, `--adopted-by` and `--all-traits`. It
+`greentopo rules --index` takes `--level`, `--adopted-by` and `--all-traits`. It
 exits `2` without `--level`, or with `--json`, `--all` or `--all-repos`: an
 index of one level is a list a reader can act on, and the full list is `--json`.
 Off a terminal it prints exactly one line per prefix; on a terminal it wraps at
@@ -1452,10 +1452,10 @@ call is killed, the standing is `unknown`, and the exit code follows. Under a
 budget no git call may prompt: `GIT_TERMINAL_PROMPT=0` always, and
 `GIT_SSH_COMMAND` set to a non-interactive ssh unless the caller set one.
 
-The generated script's second line names the aval that wrote it. `--check`
+The generated script's second line names the greentopo that wrote it. `--check`
 reads it back: the same release compares bytes, as before the marker; an older
 release, or a script from before 1.5.0 with no marker at all, is stale; a
-NEWER release is not stale, and `install` under an older aval leaves it alone
+NEWER release is not stale, and `install` under an older greentopo leaves it alone
 in both modes rather than downgrading it — two people on different releases
 would otherwise take turns rewriting the file. Prerelease order follows semver
 (`1.5.0-rc1` is before `1.5.0`). That `0` still needs the settings entry wired:
@@ -1464,18 +1464,18 @@ the bytes are a known release's output — a hand edit that also bumps the
 marker passes, because `--check` guards drift, not intent, and whoever can
 commit that file can commit anything.
 
-Both modes also read every `AVAL_VERSION:` pin under `.github/workflows` and
+Both modes also read every `GREENTOPO_VERSION:` pin under `.github/workflows` and
 `.forgejo/workflows` and print a `note` line for each one behind or ahead of
-the running aval, with the file and line. That is advisory: never an exit
+the running greentopo, with the file and line. That is advisory: never an exit
 code, never an edit to a workflow. The pin is CI's to move, and a lagging pin
 can be a decision.
 
-`aval mcp` never exits `3`. It reads no corpus at startup, because a registry
+`greentopo mcp` never exits `3`. It reads no corpus at startup, because a registry
 being edited must not take the surface away, and a corpus that will not load is
 reported inside the tool result where the caller can see why. Its exit code
 describes the transport and nothing else.
 
-`aval add --check` reports `0` when a pack's standing cannot be determined —
+`greentopo add --check` reports `0` when a pack's standing cannot be determined —
 offline, moved, access lost. Being unable to ask is not an answer, and a
 verdict of "behind" that was really "I could not reach the remote" would teach
 its caller to ignore the one that matters. It says so in words and counts it
@@ -1488,7 +1488,7 @@ else fails.
 
 ### 14.1 The tool surface
 
-`aval mcp` serves the corpus over MCP. It is a second **surface** on the same
+`greentopo mcp` serves the corpus over MCP. It is a second **surface** on the same
 semantics, never a second implementation of them: it resolves through the same
 graph and renders through the same producer as the CLI, and a payload it
 returns is byte-equal to the corresponding `--json` invocation.
@@ -1528,7 +1528,7 @@ deduplicated by canonical root, and both are load-bearing for §12.
 
 In a workspace every tool accepts `repo`, a directory name. Named, a tool
 answers for that corpus alone, and the payload is byte-equal to that
-repository's own `--json`. Omitted, `aval_resolve` and `aval_history` answer for every repository at once:
+repository's own `--json`. Omitted, `greentopo_resolve` and `greentopo_history` answer for every repository at once:
 
 ```json
 { "repos": { "<name>": { …that repository's own payload… }, … },
@@ -1544,28 +1544,28 @@ because a report does not fail when one member did; `3` when no member loaded.
 `isError` is exactly exit 3: **no entry answered anything.** With a single
 corpus the map has one member; the shape never depends on the count.
 
-`aval_show` never aggregates. Record ids are corpus-local (§3.8), so the same
+`greentopo_show` never aggregates. Record ids are corpus-local (§3.8), so the same
 `ADR-0001` exists in every repository and "show it" across a workspace is
 under-specified rather than unanswered — a protocol error naming the
 repositories, not eight near-misses reported as answers.
 
-`aval_rules` and `aval_rule` are the rule surface (§2.4). `aval_rules` lists
-what is adopted, one line each and no bodies; `aval_rule` carries the body,
+`greentopo_rules` and `greentopo_rule` are the rule surface (§2.4). `greentopo_rules` lists
+what is adopted, one line each and no bodies; `greentopo_rule` carries the body,
 which is where a rule is narrowed to this estate and where the cases it
 deliberately does not cover are written down. Their descriptions MUST state
 whose authority a rule carries and where it sits in §2.4's precedence — a
 caller that does not know it is weighing an adopted rule against a remembered
-book, and the book is what it will pick. `aval_rule` needs `repo` in a
-workspace because rule ids are corpus-local, as record ids are; `aval_rules`
+book, and the book is what it will pick. `greentopo_rule` needs `repo` in a
+workspace because rule ids are corpus-local, as record ids are; `greentopo_rules`
 needs it for the size reason below.
 
-Both apply §2.5: `aval_rules` filters by R unless `all_traits` is set and then
-carries `omitted`, exactly as `aval rules --json` does; `aval_rule` never
-filters. `aval_traits` returns what `aval traits --json` does — the vocabulary,
+Both apply §2.5: `greentopo_rules` filters by R unless `all_traits` is set and then
+carries `omitted`, exactly as `greentopo rules --json` does; `greentopo_rule` never
+filters. `greentopo_traits` returns what `greentopo traits --json` does — the vocabulary,
 the areas, R and the disclaims — and never runs detection, which needs git and
 belongs to the CLI.
 
-`aval_relevant` is the retrieval tool (§5.1), and its description carries the
+`greentopo_relevant` is the retrieval tool (§5.1), and its description carries the
 heaviest obligation on the surface: it is the one tool whose result is **not**
 an answer. A model reading a ranked list will treat the first row as the answer
 unless told otherwise, so the description MUST say that the ranking resolves
@@ -1577,7 +1577,7 @@ It needs `repo` in a workspace: paths belong to one repository, and a
 similarity score computed against one corpus's documents is not comparable with
 another's, so there is no map to hand back.
 
-`aval_keys` and `aval_heads` need `repo` too, for a different reason. A tool
+`greentopo_keys` and `greentopo_heads` need `repo` too, for a different reason. A tool
 result is paid for in context, every repository's heads at once is tens of
 kilobytes, and a caller that forgot the name must get a protocol error listing
 the options rather than that payload by accident. The map is handed out from
@@ -1595,14 +1595,14 @@ naming `.git/modules/` is a submodule, a repository of its own.
 
 **Resources never carry the map.** A resource is attached once and kept, and
 every repository's heads is tens of kilobytes a client would then carry for
-the whole session. A workspace offers `aval://repos` and one
-`aval://<name>/heads`, `aval://<name>/keys` pair per repository, the name
+the whole session. A workspace offers `greentopo://repos` and one
+`greentopo://<name>/heads`, `greentopo://<name>/keys` pair per repository, the name
 percent-encoded — a directory may be called anything — and decoded back into a
-lookup against the discovered names, never into a path. The bare `aval://heads`
-and `aval://keys` keep meaning the launch directory's own corpus and are absent
+lookup against the discovered names, never into a path. The bare `greentopo://heads`
+and `greentopo://keys` keep meaning the launch directory's own corpus and are absent
 where there is none, exactly as they errored before.
 
-`aval repos` and the `aval_repos` tool report what discovery saw: `mode`
+`greentopo repos` and the `greentopo_repos` tool report what discovery saw: `mode`
 (`corpus` or `workspace`), each repository's canonical root, its worktree
 parent if any, whether it is `shadowed` beneath an active corpus, and every
 directory that carried a registry and could not be used, with the reason. In a
@@ -1645,12 +1645,12 @@ field (`rules`), two commands, two tools, three checks and a pack section.
 Every one of the three checks needs a `rules:` in a registry to reach anything
 at all, so on a corpus that declares none they cannot fire and no verdict
 moves — which is the test the rule above actually sets. Two things a consumer
-does have to do, both stated in the changelog: a producer re-runs `aval pack
---write` and each consumer re-runs `aval add`, and everybody re-runs `aval hook
-install`, because the script's header names the aval that wrote it (from 1.5.0;
-before that its bytes were its version) and `--check` under an older aval
+does have to do, both stated in the changelog: a producer re-runs `greentopo pack
+--write` and each consumer re-runs `greentopo add`, and everybody re-runs `greentopo hook
+install`, because the script's header names the greentopo that wrote it (from 1.5.0;
+before that its bytes were its version) and `--check` under an older greentopo
 reports it stale until they do. One forward-compatibility limit is accepted rather than
-worked around: a pack carrying `rules:` is unreadable by aval before 1.2 —
+worked around: a pack carrying `rules:` is unreadable by greentopo before 1.2 —
 `pack-parses: unknown pack field` — which is the existing version gate doing
 what it exists to do, refusing a file it cannot fully understand rather than
 reading half of it.
@@ -1664,8 +1664,8 @@ verdict moves. For a registry without `areas`, rule selection and every text
 rendering are unchanged; `--json` gains `applies` on a rule only when it is
 non-empty and `omitted` only when `areas` is declared. A pack declaring neither
 `traits` nor `applies` carries exactly what it did, and differs only in the
-version line naming the aval that wrote it. The forward limit is the one 1.2.0
-accepted: aval before 1.7 refuses a pack carrying `traits` or `applies` and a
+version line naming the greentopo that wrote it. The forward limit is the one 1.2.0
+accepted: greentopo before 1.7 refuses a pack carrying `traits` or `applies` and a
 registry carrying `traits`, `areas` or `disclaims`. The hook says so rather
 than going silent (§14). **The detectors are not pinned** (§2.5): improving
 one may make `traits --check` report on a repository it passed before, and that
@@ -1691,7 +1691,7 @@ What that pins, precisely:
   the result object and nothing else (§12);
 - the frontmatter dialect (§3) — what a record is allowed to say;
 - the tool surface's mapping of verdicts to `isError` (§14.1);
-- `aval-core`'s API to the extent §15.1 describes.
+- `greentopo-core`'s API to the extent §15.1 describes.
 
 What it does not pin: the human text renderings beyond the machine token each
 one leads with, the wording of findings, and anything this document calls
@@ -1699,7 +1699,7 @@ advisory.
 
 ### 15.1 The library is versioned too
 
-`aval-core` ships to crates.io alongside the binary and shares its version
+`greentopo-core` ships to crates.io alongside the binary and shares its version
 number, so one number now carries two contracts: what the tool *does*, above,
 and what the library *exposes*.
 

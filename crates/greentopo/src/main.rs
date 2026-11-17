@@ -1,0 +1,1815 @@
+//! `greentopo` — ask what the current architecture decision is, and get a typed
+//! answer.
+//!
+//! Exit codes are the contract, and each command has its own: SEMANTICS
+//! section 14. The rule that shapes all of them is that a code meaning "I could
+//! not reach a verdict" never shares a range with a verdict.
+
+use greentopo::{
+    add, heads, hook, links, load, migrate, packfile, register, relevant, render, status,
+};
+
+use greentopo_core::graph::Verdict;
+use greentopo_core::json::Json;
+use greentopo_core::model::{Finding, Layer, Slot, DEFAULT_SCOPE};
+use greentopo_core::project;
+use load::Loaded;
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+/// Write to stdout, and end quietly when nobody is reading.
+///
+/// Rust starts a program with SIGPIPE ignored, so a write to a pipe whose
+/// reader has gone returns EPIPE — and `println!` unwraps it into a panic
+/// with a backtrace, which is what `greentopo add … | head -1` printed after the
+/// one line that was asked for. Restoring the signal's default disposition is
+/// the usual cure and needs an `unsafe` call this workspace forbids, so the
+/// cure is at the write instead: every print in this binary goes through
+/// here, and a closed pipe ends the process with the status the shell would
+/// have reported had the kernel done it (128 + SIGPIPE). Any other write
+/// failure is a tool failure and says so.
+fn emit(text: &str) {
+    let mut out = std::io::stdout().lock();
+    if let Err(e) = out.write_all(text.as_bytes()) {
+        if e.kind() == std::io::ErrorKind::BrokenPipe {
+            std::process::exit(141);
+        }
+        eprintln!("greentopo: cannot write to stdout: {}", e);
+        std::process::exit(E_FAIL);
+    }
+}
+
+// Shadow the standard macros for the rest of this file, so that no print can
+// bypass `emit`. Textual scope: this must stay above every use.
+macro_rules! print {
+    ($($arg:tt)*) => { emit(&format!($($arg)*)) };
+}
+macro_rules! println {
+    () => { emit("\n") };
+    ($($arg:tt)*) => { emit(&format!("{}\n", format_args!($($arg)*))) };
+}
+
+const USAGE: &str = "\
+greentopo — the current architecture decision, as a typed answer
+
+USAGE
+    greentopo resolve <key> [--scope <scope>]   what is decided, and nothing else
+    greentopo relevant [--path <p>]…            which keys bear on what you are about
+                  [--text <words>]         to touch, ranked. ADVISORY: a
+                  [--changed] [--top <n>]  suggestion, never a verdict — resolve
+                                           each key it names
+    greentopo keys [--names]                    the vocabulary: every key, where it
+                                           is answerable, where it is decided;
+                                           --names omits where it is decided
+    greentopo rules [--level <level>]           the adopted rules, one line each;
+               [--adopted-by <record>]     --level constraint|heuristic, --all
+               [--all] [--all-traits]      adds the inactive ones with the reason,
+               [--index] [--governs code]  --all-traits the ones about traits
+               [--full]                    this repository's areas do not name,
+                                           --index only their ids, by prefix,
+                                           --governs code only code rules,
+                                           --full each rule's text
+    greentopo traits [--summary]                what this repository says it is, and
+                [--detect | --check]       what its tracked files suggest;
+                                           ADVISORY detection, never a filter
+    greentopo rule <id>                         one rule, with its translation and why
+    greentopo check                             every invariant; the gate runs this
+    greentopo heads [--write | --check]         the projection
+    greentopo show <ADR-NNNN>                   derived status of one document
+    greentopo history <key> [--scope <scope>]   the chain, which is history not authority
+    greentopo migrate <dir>                     report what converting a legacy corpus needs
+    greentopo hook install [--check]            put the heads in front of an agent
+    greentopo hook uninstall [--write]          remove what install wrote: the marked
+                        [--check]          script and its settings entry; without
+                                           --write only says what it would remove
+    greentopo pack [--write | --check]          this corpus's declarations, for others to read
+    greentopo add <source>… [--dry-run]         vendor another repository's declarations
+    greentopo add --check [--quiet]             are the vendored packs still current;
+                     [--budget <seconds>]  --quiet speaks only when one is not,
+                                           --budget kills a remote call late
+    greentopo mcp                               serve the corpus as MCP tools on
+                                           stdio, read-only, until stdin closes
+    greentopo mcp install [--write] [--check]   register this binary with Claude Code
+                                           (user scope); without --write only
+                                           shows the command it would run
+    greentopo mcp uninstall [--write] [--check] remove that registration
+    greentopo repos                             what is answering from here: this
+                                           corpus, or every corpus one level
+                                           down when there is none above
+
+SOURCES
+    github:owner/repo   forgejo:host/owner/repo   <git-url>   <path>
+    each optionally @<rev>; the commit id is what gets recorded
+
+OPTIONS
+    --json        machine output on stdout, warnings suppressed
+    --path        relevant: a file or directory you are about to touch; repeatable
+    --text        relevant: the task, in words
+    --changed     relevant: add what git reports modified, staged or untracked
+    --top         relevant: how many keys and rules to report (default 5)
+    --level       rules: constraint or heuristic
+    --adopted-by  rules: only those one record adopts
+    --all         rules: inactive rules too, each with the reason
+    --all-traits  rules: rules for every trait, not only this repository's
+    --index       rules: ids grouped by prefix, one line each; needs --level
+    --governs     rules: only those declaring `governs: code`
+    --full        rules: each rule's body too, as `greentopo rule` prints it
+    --summary     traits: the one line the session hook prints
+    --detect      traits: propose `areas:` from the tracked files
+    --all-repos   resolve, keys, heads, history, rules: ask every corpus `greentopo repos`
+                  lists, and report them keyed by name (exit 0 clean · 1 a
+                  member contradicts or would not load · 3 none loaded)
+    --as <name>   name one vendored pack (add only); it becomes the id prefix
+    -C <dir>      run as if started in <dir>
+    -h, --help    this
+    -V, --version version
+
+EXIT
+    resolve  0 active · 4 undecided · 5 contradiction · 6 retired · 7 unknown
+    relevant 0 always · 2 usage, including an undeclared --scope
+    rule     0 found · 7 unknown
+    traits   --check: 0 nothing to report · 1 findings · 3 could not inspect
+    others   0 ok · 1 findings or stale
+    always   1 tool failure · 2 usage · 3 unreadable or invalid corpus
+    mcp      0 stdin closed · 1 transport failure · 2 usage. Never 3: a
+             corpus that will not load is reported in the tool result.
+    mcp install|uninstall  0 done, previewed, already in the wanted state,
+             or (without --check) no `claude` on PATH · 1 failed; --check:
+             1 not registered (install) or registered (uninstall) · 2 usage,
+             including --write with --check · 3 --check, `claude` absent or
+             could not answer
+    hook uninstall  --check: 0 nothing of greentopo's left · 1 something is
+    repos    0 · 2 usage · 3 nothing found, or the directory unreadable
+";
+
+/// Failures, disjoint from every verdict.
+const E_FAIL: i32 = 1;
+const E_USAGE: i32 = 2;
+const E_INVALID: i32 = 3;
+
+struct Args {
+    command: String,
+    positional: Vec<String>,
+    scope: Option<String>,
+    as_name: Option<String>,
+    level: Option<String>,
+    adopted_by: Option<String>,
+    json: bool,
+    names: bool,
+    all: bool,
+    all_repos: bool,
+    all_traits: bool,
+    /// `rules`: ids grouped by prefix instead of one statement per line.
+    index: bool,
+    /// `rules`: only rules whose file declares this `governs` value.
+    governs: Option<String>,
+    /// `rules`: each rule with its body.
+    full: bool,
+    summary: bool,
+    detect: bool,
+    write: bool,
+    check: bool,
+    dry_run: bool,
+    quiet: bool,
+    budget: Option<u64>,
+    /// `relevant`: the paths to rank against, in the order they were given.
+    paths: Vec<String>,
+    /// `relevant`: the task description.
+    text: Option<String>,
+    /// `relevant`: add the working tree's modified, staged and untracked paths.
+    changed: bool,
+    /// `relevant`: how many rows to report.
+    top: Option<usize>,
+    dir: PathBuf,
+}
+
+/// `--top`, which must be a count somebody could act on. Zero would ask for a
+/// ranking with no rows, which is a way of asking nothing.
+fn parse_top(value: &str) -> Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("`--top` wants a whole number above zero, not `{value}`"))
+}
+
+fn parse_args(argv: &[String]) -> Result<Args, String> {
+    let mut a = Args {
+        command: String::new(),
+        positional: Vec::new(),
+        scope: None,
+        as_name: None,
+        level: None,
+        adopted_by: None,
+        json: false,
+        names: false,
+        all: false,
+        all_repos: false,
+        all_traits: false,
+        index: false,
+        governs: None,
+        full: false,
+        summary: false,
+        detect: false,
+        write: false,
+        check: false,
+        dry_run: false,
+        quiet: false,
+        budget: None,
+        paths: Vec::new(),
+        text: None,
+        changed: false,
+        top: None,
+        dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    };
+    let mut i = 0;
+    while i < argv.len() {
+        let arg = argv[i].as_str();
+        match arg {
+            "--json" => a.json = true,
+            "--names" => a.names = true,
+            // `--all` before `--all-repos` is only a reading order; the match
+            // is on the whole word, so neither prefixes the other.
+            "--all" => a.all = true,
+            "--all-repos" => a.all_repos = true,
+            "--all-traits" => a.all_traits = true,
+            "--index" => a.index = true,
+            "--full" => a.full = true,
+            "--governs" => {
+                i += 1;
+                a.governs = Some(
+                    argv.get(i)
+                        .ok_or("`--governs` is `code`, not nothing")?
+                        .clone(),
+                );
+            }
+            flag if flag.starts_with("--governs=") => a.governs = Some(flag[10..].to_string()),
+            "--summary" => a.summary = true,
+            "--detect" => a.detect = true,
+            "--write" => a.write = true,
+            "--check" => a.check = true,
+            "--dry-run" => a.dry_run = true,
+            "--quiet" => a.quiet = true,
+            "--budget" => {
+                i += 1;
+                let value = argv.get(i).ok_or("`--budget` needs a number of seconds")?;
+                a.budget = Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("`--budget` wants whole seconds, not `{value}`"))?,
+                );
+            }
+            s if s.starts_with("--budget=") => {
+                let value = &s[9..];
+                a.budget = Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|n| *n > 0)
+                        .ok_or_else(|| format!("`--budget` wants whole seconds, not `{value}`"))?,
+                );
+            }
+            "--changed" => a.changed = true,
+            // Repeatable, and order-preserving: a caller naming three files
+            // named them in an order, and the report echoes it back.
+            "--path" => {
+                i += 1;
+                a.paths
+                    .push(argv.get(i).ok_or("`--path` needs a path")?.clone());
+            }
+            s if s.starts_with("--path=") => a.paths.push(s[7..].to_string()),
+            "--text" => {
+                i += 1;
+                a.text = Some(argv.get(i).ok_or("`--text` needs words")?.clone());
+            }
+            s if s.starts_with("--text=") => a.text = Some(s[7..].to_string()),
+            "--top" => {
+                i += 1;
+                let value = argv.get(i).ok_or("`--top` needs a count")?;
+                a.top = Some(parse_top(value)?);
+            }
+            s if s.starts_with("--top=") => a.top = Some(parse_top(&s[6..])?),
+            "--scope" => {
+                i += 1;
+                a.scope = Some(argv.get(i).ok_or("`--scope` needs a value")?.clone());
+            }
+            "--as" => {
+                i += 1;
+                a.as_name = Some(argv.get(i).ok_or("`--as` needs a name")?.clone());
+            }
+            s if s.starts_with("--as=") => a.as_name = Some(s[5..].to_string()),
+            "--level" => {
+                i += 1;
+                a.level = Some(argv.get(i).ok_or("`--level` needs a value")?.clone());
+            }
+            s if s.starts_with("--level=") => a.level = Some(s[8..].to_string()),
+            "--adopted-by" => {
+                i += 1;
+                a.adopted_by = Some(argv.get(i).ok_or("`--adopted-by` needs a record")?.clone());
+            }
+            s if s.starts_with("--adopted-by=") => a.adopted_by = Some(s[13..].to_string()),
+            "-C" => {
+                i += 1;
+                a.dir = PathBuf::from(argv.get(i).ok_or("`-C` needs a directory")?);
+            }
+            s if s.starts_with("--scope=") => a.scope = Some(s[8..].to_string()),
+            s if s.starts_with('-') && s.len() > 1 => {
+                return Err(format!("unknown option `{}`", s))
+            }
+            s if a.command.is_empty() => a.command = s.to_string(),
+            s => a.positional.push(s.to_string()),
+        }
+        i += 1;
+    }
+    Ok(a)
+}
+
+fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.iter().any(|a| a == "-h" || a == "--help") || argv.is_empty() {
+        print!("{}", USAGE);
+        return ExitCode::from(0);
+    }
+    if argv.iter().any(|a| a == "-V" || a == "--version") {
+        println!("greentopo {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::from(0);
+    }
+    let code = match parse_args(&argv) {
+        Ok(args) => run(&args),
+        Err(e) => {
+            eprintln!("greentopo: {}", e);
+            eprint!("{}", USAGE);
+            E_USAGE
+        }
+    };
+    ExitCode::from(code as u8)
+}
+
+/// Load, or print why not and give the caller the right failure code.
+fn loaded(args: &Args) -> Result<Loaded, i32> {
+    load::load(&args.dir).map_err(|e| {
+        emit_error(args, E_INVALID, &e.to_string(), e.findings());
+        E_INVALID
+    })
+}
+
+fn emit_error(args: &Args, exit: i32, message: &str, findings: &[Finding]) {
+    if args.json {
+        println!("{}", render::error_json(exit, message, findings));
+    } else {
+        eprintln!("greentopo: {}", message);
+        for f in findings {
+            eprintln!("  {}", f);
+        }
+    }
+}
+
+fn run(args: &Args) -> i32 {
+    match args.command.as_str() {
+        "resolve" => cmd_resolve(args),
+        "relevant" => cmd_relevant(args),
+        "keys" => cmd_keys(args),
+        "rules" => cmd_rules(args),
+        "rule" => cmd_rule(args),
+        "traits" => cmd_traits(args),
+        "repos" => cmd_repos(args),
+        "mcp" => cmd_mcp(args),
+        "check" => cmd_check(args),
+        "heads" => cmd_heads(args),
+        "show" => cmd_show(args),
+        "history" => cmd_history(args),
+        "migrate" => cmd_migrate(args),
+        "hook" => cmd_hook(args),
+        "pack" => cmd_pack(args),
+        "add" => cmd_add(args),
+        other => {
+            eprintln!("greentopo: unknown command `{}`", other);
+            eprint!("{}", USAGE);
+            E_USAGE
+        }
+    }
+}
+
+fn one_positional(args: &Args, what: &str) -> Result<String, i32> {
+    match args.positional.len() {
+        1 => Ok(args.positional[0].clone()),
+        0 => {
+            eprintln!("greentopo: `{}` needs {}", args.command, what);
+            Err(E_USAGE)
+        }
+        _ => {
+            eprintln!("greentopo: `{}` takes exactly one {}", args.command, what);
+            Err(E_USAGE)
+        }
+    }
+}
+
+/// `--all-repos`: the same question to every corpus discovery lists.
+///
+/// The map is a report, not a verdict — SEMANTICS section 14 gives it
+/// `check`'s exit contract. A corpus on its own is a one-member map, so a
+/// script never has to branch on how many there were.
+fn all_repos(args: &Args, ask: impl Fn(&Loaded, &load::Repo) -> render::Reply) -> i32 {
+    let corpora = match load::discover(&args.dir) {
+        Ok(c) => c,
+        Err(e) => {
+            emit_error(args, E_INVALID, &e.to_string(), e.findings());
+            return E_INVALID;
+        }
+    };
+    let repos: Vec<load::Repo> = corpora.repos().into_iter().cloned().collect();
+    let agg = render::across(&repos, ask);
+    if args.json {
+        println!("{}", agg.json());
+    } else {
+        print!("{}", agg.text());
+        let _ = std::io::stdout().flush();
+    }
+    agg.exit()
+}
+
+/// What discovery sees from here, and why each directory is or is not answering.
+fn cmd_repos(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("greentopo: `repos` takes no arguments");
+        return E_USAGE;
+    }
+    match load::discover(&args.dir) {
+        Ok(c) => {
+            if args.json {
+                println!("{}", render::repos_json(&c));
+            } else {
+                print!("{}", render::repos_text(&c));
+                let _ = std::io::stdout().flush();
+            }
+            0
+        }
+        Err(e) => {
+            emit_error(args, E_INVALID, &e.to_string(), e.findings());
+            E_INVALID
+        }
+    }
+}
+
+fn cmd_resolve(args: &Args) -> i32 {
+    let key = match one_positional(args, "a decision key") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if args.all_repos {
+        return all_repos(args, |loaded, _| {
+            render::resolve_in(loaded, &key, args.scope.as_deref())
+        });
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let answer = match render::answer(&l.graph, &l.root, &key, args.scope.as_deref()) {
+        Ok(a) => a,
+        // Not a verdict: exit 3 says the corpus could not answer, and the
+        // message names the slot rather than pretending to a result.
+        Err(e) => {
+            emit_error(args, E_INVALID, &e.to_string(), &[]);
+            return E_INVALID;
+        }
+    };
+    if args.json {
+        println!("{}", answer.json());
+    } else {
+        print!("{}", answer.text());
+        let _ = std::io::stdout().flush();
+    }
+    answer.exit()
+}
+
+/// `greentopo relevant` — which decisions bear on what is about to be touched.
+///
+/// Exit 0 whatever it finds. This is the one command with no verdict to report:
+/// it ranks, and a ranking that found little is not a failure to look. The only
+/// non-zero codes are usage (§14) — including a `--scope` this corpus does not
+/// declare, which is a malformed question rather than a thin answer.
+fn cmd_relevant(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!(
+            "greentopo: `relevant` takes no positional arguments; say `--path <p>`, \
+             `--text <words>` or `--changed`"
+        );
+        return E_USAGE;
+    }
+    if args.all_repos {
+        // A ranking is over one corpus's vocabulary and one repository's paths.
+        // Merging several would compare BM25 scores computed against different
+        // document collections, which is arithmetic rather than a ranking.
+        eprintln!("greentopo: `relevant` ranks one corpus; use -C <repo>, not `--all-repos`");
+        return E_USAGE;
+    }
+    let q = relevant::Query {
+        paths: args.paths.clone(),
+        text: args.text.clone(),
+        changed: args.changed,
+        top: args.top.unwrap_or(relevant::DEFAULT_TOP),
+        scope: args.scope.clone(),
+    };
+    if q.is_empty() {
+        eprintln!(
+            "greentopo: `relevant` needs something to rank against: `--path <p>`, \
+             `--text <words>` or `--changed`"
+        );
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let r = relevant::relevant_in(&l, &q);
+    if args.json {
+        println!("{}", r.json);
+    } else if r.exit == 0 {
+        print!("{}", r.text);
+        let _ = std::io::stdout().flush();
+    } else {
+        eprint!("{}", r.text);
+    }
+    r.exit
+}
+
+/// The decision vocabulary.
+///
+/// Discovery, not authority. §12.1 rules out finding a decision by similarity,
+/// so asking about a key means knowing its exact name — and until this verb
+/// there was no way to learn one from the tool itself.
+fn cmd_keys(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("greentopo: `keys` takes no arguments");
+        return E_USAGE;
+    }
+    let detail = if args.names {
+        render::Detail::Names
+    } else {
+        render::Detail::Full
+    };
+    if args.all_repos {
+        return all_repos(args, |l, _| render::keys_in(l, detail));
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.json {
+        println!("{}", render::keys_json(&l.graph, &l.packs, detail));
+    } else {
+        print!("{}", render::keys_text(&l.graph, &l.packs));
+        let _ = std::io::stdout().flush();
+    }
+    0
+}
+
+/// The rules this corpus's records adopt.
+///
+/// One line each, and no bodies: this is the list a caller reads to find out
+/// what there is. `greentopo rule <id>` is where the explanation lives, and keeping
+/// them apart is what lets the session hook name every constraint without
+/// printing an essay per constraint. `--index` goes one step further and
+/// prints the ids alone, grouped by prefix: that is what the hook prints.
+fn cmd_rules(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("greentopo: `rules` takes no arguments; `greentopo rule <id>` shows one");
+        return E_USAGE;
+    }
+    // An index of one level is a list a reader can act on; refused before any
+    // corpus is loaded, so the answer does not depend on the corpus.
+    if args.index && (args.level.is_none() || args.json || args.all || args.all_repos) {
+        eprintln!(
+            "greentopo: --index needs --level and cannot be combined with --json, --all or --all-repos; use greentopo rules --json for the full list"
+        );
+        return E_USAGE;
+    }
+    if args.index && args.full {
+        eprintln!("greentopo: `greentopo rules --full` prints every rule's text and cannot be combined with --index");
+        return E_USAGE;
+    }
+    let governs = match args.governs.as_deref() {
+        None => None,
+        Some(text) => match greentopo_core::model::Governs::parse(text) {
+            Some(kind) => Some(kind),
+            None => {
+                eprintln!("greentopo: `--governs` is `code`, not `{}`", text);
+                return E_USAGE;
+            }
+        },
+    };
+    let level = match args.level.as_deref() {
+        None => None,
+        Some(l) => match greentopo_core::model::Level::parse(l) {
+            Some(x) => Some(x),
+            None => {
+                eprintln!(
+                    "greentopo: `--level` is `constraint` or `heuristic`, not `{}`",
+                    l
+                );
+                return E_USAGE;
+            }
+        },
+    };
+    let filter = render::Filter {
+        level,
+        adopted_by: args.adopted_by.clone(),
+        all: args.all,
+        all_traits: args.all_traits,
+        governs,
+        full: args.full,
+    };
+    if args.all_repos {
+        return all_repos(args, |l, _| render::rules_in(l, &filter));
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.json {
+        println!("{}", render::rules_json(&l.graph, &filter));
+    } else {
+        if args.index {
+            // Wrapped for a person at a terminal only: a script, the session
+            // hook among them, gets exactly one line per prefix.
+            let width = std::io::stdout().is_terminal().then_some(80);
+            print!("{}", render::rules_index(&l.graph, &filter, width));
+        } else {
+            print!("{}", render::rules_text(&l.graph, &filter));
+        }
+        let _ = std::io::stdout().flush();
+        // stderr, never stdout: the session hook counts stdout lines.
+        if let Some(n) = render::rules_omitted(&l.graph, &filter)
+            .as_ref()
+            .and_then(render::omitted_notice)
+        {
+            eprintln!("greentopo: {}", n);
+        }
+    }
+    0
+}
+
+/// What this repository says it is (SEMANTICS section 2.5), and — with
+/// `--detect` or `--check` — what its tracked files suggest.
+fn cmd_traits(args: &Args) -> i32 {
+    if !args.positional.is_empty() {
+        eprintln!("greentopo: `traits` takes no arguments");
+        return E_USAGE;
+    }
+    let modes = [args.summary, args.detect, args.check]
+        .iter()
+        .filter(|x| **x)
+        .count();
+    if modes > 1 {
+        eprintln!("greentopo: `traits` takes one of --summary, --detect, --check");
+        return E_USAGE;
+    }
+    if args.all_repos {
+        eprintln!("greentopo: `traits` describes one repository; use -C <repo>");
+        return E_USAGE;
+    }
+    // `--detect` is how a repository finds out what to declare, so it must
+    // work before there is a registry to declare it in: with none, it reads
+    // the repository git names and proposes against an empty vocabulary.
+    if args.detect {
+        if let Err(load::LoadError::NoRegistry(_)) = load::load(&args.dir) {
+            let root = greentopo::traits::repository_root(&args.dir);
+            let found = match greentopo::traits::tracked(&root)
+                .and_then(|files| greentopo::traits::detect(&root, &files))
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    emit_error(args, E_INVALID, &e.to_string(), &[]);
+                    return E_INVALID;
+                }
+            };
+            let empty = greentopo_core::model::Registry::empty("");
+            if args.json {
+                println!("{}", greentopo::traits::detect_json(&found));
+            } else {
+                print!("{}", greentopo::traits::detect_text(&empty, &found));
+                let _ = std::io::stdout().flush();
+            }
+            return 0;
+        }
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    if args.summary {
+        // The hook's line. Reads the corpus only: no git, no detection.
+        if args.json {
+            println!("{}", greentopo::traits::traits_json(&l));
+        } else if let Some(line) = greentopo::traits::summary(&l) {
+            println!("{}", line);
+        }
+        return 0;
+    }
+    if !args.detect && !args.check {
+        if args.json {
+            println!("{}", greentopo::traits::traits_json(&l));
+        } else {
+            print!("{}", greentopo::traits::traits_text(&l));
+            let _ = std::io::stdout().flush();
+        }
+        return 0;
+    }
+    let inspected = greentopo::traits::tracked(&l.root)
+        .and_then(|files| greentopo::traits::detect(&l.root, &files).map(|found| (files, found)));
+    let (files, found) = match inspected {
+        Ok(x) => x,
+        Err(e) => {
+            // Could not look is not "found nothing" (section 14).
+            emit_error(args, E_INVALID, &e.to_string(), &[]);
+            return E_INVALID;
+        }
+    };
+    let reg = l.graph.registry();
+    if args.detect {
+        if args.json {
+            println!("{}", greentopo::traits::detect_json(&found));
+        } else {
+            print!("{}", greentopo::traits::detect_text(reg, &found));
+            let _ = std::io::stdout().flush();
+        }
+        return 0;
+    }
+    let findings = greentopo::traits::check(reg, &files, &found);
+    if args.json {
+        println!("{}", greentopo::traits::check_json(&findings));
+    } else if findings.is_empty() {
+        println!("traits: every detected trait is declared or disclaimed, and every glob matches");
+    } else {
+        for f in &findings {
+            println!("{}: {}", f.kind, f.message);
+        }
+        println!(
+            "{} finding(s). Declare the trait under `areas:`, or say why it does not \
+             hold under `disclaims:`.",
+            findings.len()
+        );
+    }
+    if findings.is_empty() {
+        0
+    } else {
+        E_FAIL
+    }
+}
+
+/// One rule, with its translation.
+///
+/// Exit 7 for an id the corpus does not declare, with the same advisory
+/// did-you-mean `show` gives: a rule id is exact, for §12.1's reason.
+fn cmd_rule(args: &Args) -> i32 {
+    let id = match one_positional(args, "a rule id") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if args.all_repos {
+        // Rule ids are local to a corpus, exactly as record ids are (§3.8).
+        eprintln!(
+            "greentopo: `rule` names one rule in one corpus; use -C <repo>, not `--all-repos`"
+        );
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let r = render::rule_in(&l, &id);
+    if args.json {
+        println!("{}", r.json);
+    } else if r.exit == 0 {
+        print!("{}", r.text);
+        let _ = std::io::stdout().flush();
+    } else {
+        eprint!("{}", r.text);
+    }
+    r.exit
+}
+
+/// Serve the corpus as MCP tools on stdio.
+///
+/// Reads no corpus here: a registry mid-edit must not take the surface away,
+/// and each call loads the working tree fresh anyway.
+fn cmd_mcp(args: &Args) -> i32 {
+    if let Some(word @ ("install" | "uninstall")) = args.positional.first().map(String::as_str) {
+        if args.positional.len() > 1 {
+            eprintln!("greentopo: `mcp {word}` takes no arguments");
+            return E_USAGE;
+        }
+        let registration = if word == "install" {
+            Registration::Add
+        } else {
+            Registration::Remove
+        };
+        return cmd_mcp_register(args, registration);
+    }
+    if !args.positional.is_empty() {
+        eprintln!("greentopo: `mcp` takes no arguments");
+        return E_USAGE;
+    }
+    greentopo::mcp::serve(&args.dir)
+}
+
+/// Which way `greentopo mcp install|uninstall` changes the registration.
+#[derive(Clone, Copy)]
+enum Registration {
+    Add,
+    Remove,
+}
+
+/// `greentopo mcp install|uninstall` — registration with Claude Code, user scope.
+fn cmd_mcp_register(args: &Args, registration: Registration) -> i32 {
+    let verb = match registration {
+        Registration::Add => "install",
+        Registration::Remove => "uninstall",
+    };
+    if args.write && args.check {
+        eprintln!("greentopo: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    if args.check {
+        return match register::registered() {
+            register::Registered::NoClaude => {
+                eprintln!(
+                    "greentopo mcp {verb} --check: `claude` is not on PATH; nothing to check"
+                );
+                E_INVALID
+            }
+            register::Registered::Unknown(why) => {
+                eprintln!("greentopo: cannot tell whether greentopo is registered: {why}");
+                E_INVALID
+            }
+            register::Registered::Yes => {
+                println!("greentopo mcp {verb} --check: registered");
+                match registration {
+                    Registration::Add => 0,
+                    Registration::Remove => E_FAIL,
+                }
+            }
+            register::Registered::No => {
+                println!("greentopo mcp {verb} --check: not registered");
+                match registration {
+                    Registration::Add => E_FAIL,
+                    Registration::Remove => 0,
+                }
+            }
+        };
+    }
+    let claude_args = match registration {
+        Registration::Add => {
+            let exe = match std::env::current_exe() {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("greentopo: cannot find the running greentopo: {e}");
+                    return E_FAIL;
+                }
+            };
+            register::add_args(&register::registered_path(&exe))
+        }
+        Registration::Remove => register::remove_args(),
+    };
+    let shown = format!("claude {}", claude_args.join(" "));
+    if !args.write {
+        println!("would run: {shown}");
+        eprintln!("pass --write to run it");
+        return 0;
+    }
+    match register::registered() {
+        register::Registered::NoClaude => {
+            eprintln!("greentopo: `claude` is not on PATH; nothing was registered or removed");
+            return 0;
+        }
+        register::Registered::Yes if matches!(registration, Registration::Add) => {
+            eprintln!("greentopo mcp install: already registered; nothing to do");
+            return 0;
+        }
+        register::Registered::No if matches!(registration, Registration::Remove) => {
+            eprintln!("greentopo mcp uninstall: not registered; nothing to do");
+            return 0;
+        }
+        // Unknown: let the add/remove itself answer.
+        register::Registered::Yes | register::Registered::No | register::Registered::Unknown(_) => {
+        }
+    }
+    match register::run_claude(&claude_args) {
+        register::Ran::Absent => {
+            eprintln!("greentopo: `claude` is not on PATH; nothing was registered or removed");
+            0
+        }
+        register::Ran::Unable(why) => {
+            eprintln!("greentopo: {why}");
+            E_FAIL
+        }
+        register::Ran::Exited { code: Some(0), .. } => {
+            eprintln!("ran: {shown}");
+            0
+        }
+        register::Ran::Exited { code, output } => {
+            eprintln!(
+                "greentopo: `{shown}` failed ({}): {}",
+                code.map_or("signal".to_string(), |c| format!("exit {c}")),
+                output.trim()
+            );
+            E_FAIL
+        }
+    }
+}
+
+fn cmd_check(args: &Args) -> i32 {
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    // Layer B, then Layer C. Layer A already passed, or `loaded` would have
+    // failed with exit 3.
+    let mut findings = l.graph.single_head_findings();
+    findings.extend(links::check(&l));
+    findings.extend(heads::findings(&l));
+    findings.extend(status::check(&l));
+    findings.extend(packfile::findings(&l));
+    findings.extend(manual_index(&l));
+    findings.sort_by_key(|a| (a.layer, a.file.clone(), a.line));
+
+    // Warnings: the same condition as a cross-scope exit 5, reported before a
+    // query meets it. They never change the exit status.
+    let warnings = l.graph.in_scopes_conflicts();
+    if !args.json {
+        for warning in &warnings {
+            eprintln!("warning: {}", warning);
+        }
+    }
+
+    if args.json {
+        let j = Json::obj()
+            .set("ok", findings.is_empty())
+            .set("exit", if findings.is_empty() { 0 } else { E_FAIL })
+            .set(
+                "findings",
+                findings
+                    .iter()
+                    .map(render::finding_json)
+                    .collect::<Vec<_>>(),
+            )
+            .set(
+                "warnings",
+                warnings
+                    .iter()
+                    .map(render::finding_json)
+                    .collect::<Vec<_>>(),
+            );
+        println!("{}", j);
+    } else if findings.is_empty() {
+        println!(
+            "greentopo: {} decision records, no findings",
+            l.graph.corpus().adrs.len()
+        );
+    } else {
+        for f in &findings {
+            println!("{}", f);
+        }
+        println!(
+            "\n{} finding(s). The corpus parses; these are things it says that it should not.",
+            findings.len()
+        );
+    }
+    if findings.is_empty() {
+        0
+    } else {
+        E_FAIL
+    }
+}
+
+/// A hand-maintained index is copied state, and the failure it produces has no
+/// possible invariant: nothing knows a missing row should have existed. The
+/// projection replaces it.
+fn manual_index(l: &Loaded) -> Vec<Finding> {
+    // No `dir` means `adr_dir` is the repository root, and the repository's own
+    // README is not an ADR index. Checking it would report a link table in
+    // somebody's project readme as a corpus defect.
+    if !l.graph.registry().has_dir() {
+        return Vec::new();
+    }
+    let readme = l.adr_dir.join("README.md");
+    let Ok(src) = std::fs::read_to_string(&readme) else {
+        return Vec::new();
+    };
+    let rows = src
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            t.starts_with("| [") || (t.starts_with('|') && t.contains("](") && t.contains(".md)"))
+        })
+        .count();
+    if rows >= 3 {
+        vec![Finding::new(
+            Layer::C,
+            "no-manual-index",
+            format!(
+                "{} hand-maintained index rows; HEADS.md is the generated index",
+                rows
+            ),
+        )
+        .in_file(format!("{}/README.md", l.graph.registry().dir))]
+    } else {
+        Vec::new()
+    }
+}
+
+fn cmd_heads(args: &Args) -> i32 {
+    if args.write && args.check {
+        eprintln!("greentopo: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    if args.all_repos {
+        // A projection is written into ONE corpus's tree and checked against
+        // it; a report across several has no file to be either.
+        if args.write || args.check {
+            eprintln!("greentopo: `--all-repos` reports; it cannot `--write` or `--check`");
+            return E_USAGE;
+        }
+        return all_repos(args, |l, _| render::heads_in(l));
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let text = project::render(&l.graph);
+    let path = l.adr_dir.join(load::HEADS);
+    if (args.write || args.check) && !heads::applies(&l) {
+        // A registry that only vendors keeps no records and declares no `dir`,
+        // so there is nowhere to put the file. `greentopo heads` on its own still
+        // prints the borrowed heads, which is what the session hook reads.
+        eprintln!(
+            "greentopo: this registry declares no `dir`, so there is nowhere to write \
+             {}; `greentopo heads` prints them instead",
+            load::HEADS
+        );
+        return E_USAGE;
+    }
+    if args.write {
+        // Content-idempotent: a file that already states the projection keeps
+        // its bytes, so a formatter's padding is not undone on every run and
+        // then reapplied on every commit.
+        match heads::write(&l) {
+            // Section 12 says `--json` writes the result object to stdout and
+            // nothing else. These three printed nothing at all under `--json`,
+            // and `--check` printed its findings to stderr, so the row-level
+            // detail was unreachable from a machine caller.
+            Ok(heads::Wrote::Unchanged) => {
+                heads_json_or_text(args, "unchanged", &path, &[]);
+                0
+            }
+            Ok(heads::Wrote::Written) => {
+                heads_json_or_text(args, "written", &path, &[]);
+                0
+            }
+            Err(e) => {
+                emit_error(args, E_FAIL, &format!("{}: {}", path.display(), e), &[]);
+                E_FAIL
+            }
+        }
+    } else if args.check {
+        let f = heads::findings(&l);
+        if f.is_empty() {
+            heads_json_or_text(args, "current", &path, &[]);
+            0
+        } else {
+            heads_json_or_text(args, "stale", &path, &f);
+            E_FAIL
+        }
+    } else if args.json {
+        // Section 12: `--json` writes the result object and nothing else. Bare
+        // `heads` used to ignore the flag and print the markdown table, so a
+        // machine caller asking for JSON silently got a document instead.
+        println!("{}", render::heads_json(&l.graph));
+        0
+    } else {
+        print!("{}", text);
+        0
+    }
+}
+
+/// One place that decides where `heads` output goes, because section 12 says
+/// `--json` writes the result object to stdout and nothing else.
+fn heads_json_or_text(args: &Args, state: &str, path: &std::path::Path, findings: &[Finding]) {
+    if args.json {
+        let j = Json::obj()
+            .set("state", state)
+            .set("file", path.display().to_string())
+            .set(
+                "findings",
+                findings
+                    .iter()
+                    .map(render::finding_json)
+                    .collect::<Vec<_>>(),
+            );
+        println!("{}", j);
+        return;
+    }
+    match state {
+        "current" => println!("greentopo: HEADS.md is current"),
+        "unchanged" => println!("greentopo: {} already current", path.display()),
+        "written" => println!("greentopo: wrote {}", path.display()),
+        _ => {}
+    }
+    for f in findings {
+        eprintln!("{}", f);
+    }
+}
+
+/// `greentopo hook install` — the session-start hook.
+///
+/// `uninstall` removes exactly what install wrote, and previews without
+/// `--write`.
+fn cmd_hook(args: &Args) -> i32 {
+    let what = match one_positional(args, "`install` or `uninstall`") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if what == "uninstall" {
+        return cmd_hook_uninstall(args);
+    }
+    if what != "install" {
+        eprintln!(
+            "greentopo: unknown hook command `{}`; the commands are `install` and `uninstall`",
+            what
+        );
+        return E_USAGE;
+    }
+    //  already resolved this, defaulting to the working directory. The
+    // hook installs where the person is, not where the registry happens to be:
+    // a repository may hold a corpus in a subdirectory and still want the hook
+    // at its own root.
+    let root = args.dir.clone();
+    let report = match hook::install(&root, args.check) {
+        Ok(r) => r,
+        Err(hook::Error::SettingsUnparseable(e)) => {
+            // Stop rather than replace it. A settings file this cannot read is
+            // one somebody wrote, and overwriting it would lose whatever else
+            // it says.
+            eprintln!(
+                "greentopo: {} is not valid JSON ({}) — fix or remove it, then run this again",
+                hook::SETTINGS_PATH,
+                e
+            );
+            return E_INVALID;
+        }
+        Err(hook::Error::Io(e)) => {
+            eprintln!("greentopo: {}", e);
+            return E_FAIL;
+        }
+    };
+
+    for c in &report.changes {
+        let word = match c.status {
+            hook::Status::Written => "wrote",
+            hook::Status::Unchanged => "ok",
+            hook::Status::Stale => "stale",
+            hook::Status::Newer => "newer",
+            hook::Status::Removed | hook::Status::Present | hook::Status::Foreign => "ok",
+        };
+        println!("  {:<6} {}  ({})", word, c.path, c.detail);
+    }
+
+    // Advisory, in both modes, and never the exit code: a workflow pinning an
+    // older greentopo will call the script this one writes stale until the pin
+    // moves, and this line is the only thing that says so before CI does.
+    // Plain stdout rather than `::notice::` — the workflow's own echo speaks
+    // CI's vocabulary; this tool does not.
+    let running = hook::Version::running();
+    for p in &report.pins_behind {
+        println!(
+            "  note   {}:{} pins GREENTOPO_VERSION {}; this is {} — bump the pin in the same change",
+            p.path, p.line, p.version, running
+        );
+    }
+    for p in &report.pins_ahead {
+        println!(
+            "  note   {}:{} pins GREENTOPO_VERSION {}, ahead of this {} — its --check will call a script from this greentopo stale",
+            p.path, p.line, p.version, running
+        );
+    }
+
+    if args.check {
+        let n = report.stale();
+        if n == 0 {
+            println!("greentopo hook install --check: up to date");
+            return 0;
+        }
+        println!(
+            "greentopo hook install --check: {} file(s) out of date; run `greentopo hook install`",
+            n
+        );
+        return E_FAIL;
+    }
+
+    println!();
+    println!(
+        "Repo-specific caveats go in {} — the hook appends that file after the",
+        hook::NOTES_PATH
+    );
+    println!("heads, and installing again leaves it alone.");
+
+    if !report.ignored.is_empty() {
+        println!();
+        println!("WARNING: git ignores these, so the hook would work here and ship to nobody.");
+        println!("Add a negation for each:");
+        for p in &report.ignored {
+            println!("  !{}", p);
+        }
+    }
+    0
+}
+
+fn cmd_hook_uninstall(args: &Args) -> i32 {
+    if args.write && args.check {
+        eprintln!("greentopo: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    let removal = if args.write {
+        hook::Removal::Write
+    } else {
+        hook::Removal::Preview
+    };
+    let report = match hook::uninstall(&args.dir, removal) {
+        Ok(r) => r,
+        Err(hook::Error::SettingsUnparseable(e)) => {
+            eprintln!(
+                "greentopo: {} is not valid JSON ({}) — fix or remove it, then run this again",
+                hook::SETTINGS_PATH,
+                e
+            );
+            return E_INVALID;
+        }
+        Err(hook::Error::Io(e)) => {
+            eprintln!("greentopo: {}", e);
+            return E_FAIL;
+        }
+    };
+    let mut pending = 0;
+    for c in &report.changes {
+        let word = match c.status {
+            hook::Status::Removed => "removed",
+            hook::Status::Present => {
+                pending += 1;
+                "would remove"
+            }
+            hook::Status::Foreign => "left",
+            hook::Status::Written
+            | hook::Status::Unchanged
+            | hook::Status::Stale
+            | hook::Status::Newer => "ok",
+        };
+        println!("  {:<12} {}  ({})", word, c.path, c.detail);
+    }
+    if args.check {
+        if pending == 0 {
+            println!("greentopo hook uninstall --check: nothing of greentopo's is installed");
+            return 0;
+        }
+        println!("greentopo hook uninstall --check: installed");
+        eprintln!("run `greentopo hook uninstall --write` to remove it");
+        return E_FAIL;
+    }
+    if pending > 0 {
+        eprintln!("pass --write to remove it");
+    }
+    0
+}
+
+/// `greentopo pack` — publish this corpus's declarations.
+fn cmd_pack(args: &Args) -> i32 {
+    if args.write && args.check {
+        eprintln!("greentopo: `--write` and `--check` are mutually exclusive");
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let path = packfile::path(&l);
+    if args.write {
+        match packfile::write(&l) {
+            Ok(packfile::Wrote::Unchanged) => {
+                println!("greentopo: {} already current", path.display());
+                0
+            }
+            Ok(packfile::Wrote::Written) => {
+                println!("greentopo: wrote {}", path.display());
+                0
+            }
+            Err(e) => {
+                emit_error(args, E_FAIL, &format!("{}: {}", path.display(), e), &[]);
+                E_FAIL
+            }
+        }
+    } else if args.check {
+        let f = packfile::findings(&l);
+        if f.is_empty() {
+            if !packfile::publishes(&l) {
+                println!("greentopo: this corpus publishes no pack");
+            } else {
+                println!("greentopo: {} is current", greentopo_core::pack::FILE);
+            }
+            0
+        } else {
+            for x in &f {
+                println!("{}", x);
+            }
+            E_FAIL
+        }
+    } else {
+        print!("{}", packfile::render(&l));
+        0
+    }
+}
+
+/// `greentopo add --check` — are the vendored packs still what their revisions name?
+///
+/// This is the one thing `amont` deliberately does not have, and the reason
+/// for the difference is the payload. Its vendored rows are commands, so being
+/// behind is safe and updating is the risk. A vendored *decision* is the other
+/// way round: being behind means answering `active` with something that was
+/// superseded, which is precisely the failure the whole tool exists to
+/// prevent.
+///
+/// It reaches the network. Until 1.4 that meant nothing called it — a
+/// fleet decision that changed had to be re-added in each consumer by a
+/// person who remembered to ask, and ADR-0017 in the fleet corpus was
+/// merged into a corpus that no consumer would learn about. Now the
+/// session hook asks, under `--budget` and `--quiet`: at most once an hour
+/// per repository, killed at the deadline, and speaking only when a pack
+/// is behind or edited. "Could not ask" prints nothing there, because a
+/// notice that fires on a flaky network is the notice nobody reads on the
+/// day it matters. The gate still does not call it (a commit must not
+/// wait on a remote), and CI may, as an advisory job, where the runner
+/// holds a credential for the source — a private corpus is reachable from
+/// a private consumer's runner, not from a public one's.
+fn cmd_add_check(args: &Args) -> i32 {
+    if let Some(seconds) = args.budget {
+        greentopo::fetch::set_budget(seconds);
+    }
+    let quiet = args.quiet;
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let packs = &l.graph.registry().packs;
+    if packs.is_empty() {
+        if !quiet {
+            println!("greentopo: this repository vendors no packs");
+        }
+        return 0;
+    }
+
+    let mut behind = 0;
+    let mut edited = 0;
+    let mut unknown = 0;
+    for o in add::origins(&l.root, packs) {
+        let o = match o {
+            Ok(o) => o,
+            Err(e) => {
+                if !quiet {
+                    println!("  {:<9} {}", "unmarked", e);
+                }
+                unknown += 1;
+                continue;
+            }
+        };
+        match add::standing(&l.root, &o) {
+            add::Standing::Current => {
+                if !quiet {
+                    println!(
+                        "  {:<9} {} @ {}  ({})",
+                        "current",
+                        o.name,
+                        greentopo::fetch::short(&o.commit),
+                        o.source
+                    )
+                }
+            }
+            add::Standing::CurrentMoved(now) => {
+                if !quiet {
+                    println!(
+                        "  {:<9} {} @ {}  ({}; {} now names {}, same declarations)",
+                        "current",
+                        o.name,
+                        greentopo::fetch::short(&o.commit),
+                        o.source,
+                        o.rev,
+                        greentopo::fetch::short(&now)
+                    )
+                }
+            }
+            add::Standing::Edited => {
+                edited += 1;
+                println!(
+                    "  {:<9} {}: the vendored declarations are not what {}@{} published",
+                    "edited",
+                    o.name,
+                    o.source,
+                    greentopo::fetch::short(&o.commit)
+                );
+            }
+            add::Standing::Behind(now) => {
+                behind += 1;
+                println!(
+                    "  {:<9} {} has {}, {} now names {}",
+                    "behind",
+                    o.name,
+                    greentopo::fetch::short(&o.commit),
+                    o.rev,
+                    greentopo::fetch::short(&now)
+                );
+            }
+            add::Standing::Unknown(e) => {
+                unknown += 1;
+                if !quiet {
+                    println!("  {:<9} {}: {}", "unknown", o.name, first_line(&e));
+                }
+            }
+            add::Standing::Unmarked => {
+                unknown += 1;
+                if !quiet {
+                    println!(
+                        "  {:<9} {}: `{}` is not a source this version understands",
+                        "unknown", o.name, o.source
+                    );
+                }
+            }
+        }
+    }
+
+    if behind + edited == 0 {
+        if unknown > 0 && !quiet {
+            println!(
+                "\n{} pack(s) could not be checked. Being unable to ask is not an answer.",
+                unknown
+            );
+        }
+        return 0;
+    }
+    // One sentence for both, because one command fixes both: `greentopo add` writes
+    // what the source published, which is what a behind pack lacks and what an
+    // edited one lost.
+    println!(
+        "\n{} pack(s) {}. Run `greentopo add <source>` for each, read the diff, \
+         then `greentopo heads --write`.",
+        behind + edited,
+        match (behind, edited) {
+            (0, _) => "edited",
+            (_, 0) => "behind",
+            _ => "behind or edited",
+        }
+    );
+    E_FAIL
+}
+
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or(s)
+}
+
+/// `greentopo add` — vendor another repository's declarations.
+///
+/// Every source is resolved, fetched and parsed before any of them is written,
+/// so a second source that turns out to be unreachable does not leave the first
+/// one half-installed.
+fn cmd_add(args: &Args) -> i32 {
+    if args.check {
+        return cmd_add_check(args);
+    }
+    if args.positional.is_empty() {
+        eprintln!(
+            "greentopo: `add` needs a source (github:owner/repo, \
+             forgejo:host/owner/repo, a git URL, or a path)"
+        );
+        return E_USAGE;
+    }
+    if args.as_name.is_some() && args.positional.len() > 1 {
+        eprintln!("greentopo: `--as` names one pack; add them one at a time");
+        return E_USAGE;
+    }
+    // No registry yet is the ordinary first step, not an error: vendoring
+    // the fleet's decisions is how a repository adopts them. The registry is
+    // created at the repository's root — the git top level, else the
+    // directory asked — holding only what `add` then fills in.
+    let mut created = None;
+    let root = match load::find_root(&args.dir) {
+        Some(r) => r,
+        None => {
+            let root = greentopo::traits::repository_root(&args.dir);
+            if !args.dry_run {
+                if let Err(e) = std::fs::write(root.join(load::REGISTRY), add::STARTER_REGISTRY) {
+                    eprintln!("greentopo: {}: {}", root.join(load::REGISTRY).display(), e);
+                    return E_FAIL;
+                }
+            }
+            created = Some(root.join(load::REGISTRY));
+            root
+        }
+    };
+
+    let mut vendored = Vec::new();
+    for spec in &args.positional {
+        match add::resolve_one(spec, args.as_name.as_deref()) {
+            Ok(v) => vendored.push(v),
+            Err(e) => {
+                eprintln!("greentopo: {}", e);
+                return E_FAIL;
+            }
+        }
+    }
+
+    // Two sources that resolve to one destination are a collision the disk
+    // cannot show yet: both plan as `new`, both are written, and the second
+    // silently replaces the first — exit 0, one pack's decisions gone.
+    if let Some((first, second)) = add::same_destination(&vendored) {
+        eprintln!(
+            "greentopo: {} and {} would both be vendored as `{}` — add one of them \
+             with `--as <name>`",
+            first.source.label, second.source.label, second.name
+        );
+        return E_FAIL;
+    }
+
+    // Plan everything, then print, then write. A collision must stop the whole
+    // command rather than the one source that hit it.
+    let mut plans = Vec::new();
+    for v in &vendored {
+        match add::plan(&root, v) {
+            Ok(add::Plan::Collision { rel, other }) => {
+                eprintln!(
+                    "greentopo: {} already holds {}, which came from {} — name this \
+                     one with `--as <name>`",
+                    rel, v.name, other
+                );
+                return E_FAIL;
+            }
+            Ok(p) => plans.push(p),
+            Err(e) => {
+                eprintln!("greentopo: {}", e);
+                return E_FAIL;
+            }
+        }
+    }
+
+    for (v, p) in vendored.iter().zip(&plans) {
+        // An owned String rather than a borrow of one arm's temporary: the
+        // MSRV does not extend a temporary's lifetime out of a match arm, and
+        // the newer compiler that does would have let this reach a release.
+        let state: String = match p {
+            add::Plan::New => "new".into(),
+            add::Plan::Unchanged => "unchanged".into(),
+            // The same commit, declaring something else: the file in this
+            // repository was changed, and this run puts back what the source
+            // published. That is the `edited` standing `--check` reports.
+            add::Plan::Update(old) if old == &v.id => "edited here".into(),
+            add::Plan::Update(old) => format!("was {}", greentopo::fetch::short(old)),
+            add::Plan::Migrate { had, .. } if had == &v.id => "migrated".into(),
+            add::Plan::Migrate { had, .. } => {
+                format!("migrated, was {}", greentopo::fetch::short(had))
+            }
+            add::Plan::Collision { .. } => unreachable!("returned above"),
+        };
+        println!(
+            "{} @ {} ({}) declares {} record(s), {} key(s):",
+            v.source.label,
+            greentopo::fetch::short(&v.id),
+            state,
+            v.records,
+            v.keys.len()
+        );
+        // Printed with the plan rather than with the writing, so `--dry-run`
+        // says that the file is about to move.
+        if let add::Plan::Migrate { from, .. } = p {
+            println!("  {:<9} {}  {} → {}", "migrated", v.name, from, v.rel);
+        }
+        for k in &v.keys {
+            println!("    {}", k);
+        }
+    }
+
+    if args.dry_run {
+        if let Some(p) = &created {
+            println!(
+                "\n--dry-run: nothing written; {} would be created",
+                p.display()
+            );
+        } else {
+            println!("\n--dry-run: nothing written");
+        }
+        return 0;
+    }
+    if let Some(p) = &created {
+        println!("  created {}", p.display());
+    }
+
+    let mut registered = Vec::new();
+    let mut relisted = Vec::new();
+    for (v, p) in vendored.iter().zip(&plans) {
+        match add::write(&root, v, p) {
+            Ok(add::Listed::Added) => registered.push(v.rel.clone()),
+            Ok(add::Listed::Relisted) => relisted.push(v.rel.clone()),
+            Ok(add::Listed::Already) => {}
+            Err(e) => {
+                eprintln!("greentopo: {}", e);
+                return E_FAIL;
+            }
+        }
+    }
+
+    println!();
+    for (v, p) in vendored.iter().zip(&plans) {
+        // A pack that already declares what the producer published is not
+        // rewritten, so saying "wrote" would be a claim about the disk that is
+        // not true — and the file's formatting, deliberately, is not ours.
+        match p {
+            add::Plan::Unchanged => println!("  unchanged {}", v.rel),
+            _ => println!("  wrote {}", v.rel),
+        }
+    }
+    for r in &registered {
+        println!("  listed {} in {}", r, load::REGISTRY);
+    }
+    for r in &relisted {
+        println!("  relisted {} in {}", r, load::REGISTRY);
+    }
+
+    // A vendored decision is decided here, so it belongs in the projection —
+    // which means the projection is now out of date, and the gate will say so
+    // at the least convenient moment. Say it here instead.
+    if let Ok(l) = load::load(&root) {
+        if heads::applies(&l) && !heads::findings(&l).is_empty() {
+            println!("  stale  {}/{}", l.graph.registry().dir, load::HEADS);
+            println!(
+                "\nThe projection now has rows it did not have. Run `greentopo heads --write`."
+            );
+        }
+    }
+
+    println!();
+    println!(
+        "These decisions are not yours to edit. To change one, change it in the \
+         repository\nit came from and run `greentopo add` again; a local record \
+         deciding the same slot is a\ncontradiction, which is what makes one \
+         decision one decision."
+    );
+    0
+}
+
+fn cmd_show(args: &Args) -> i32 {
+    let id = match one_positional(args, "an ADR id") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if args.all_repos {
+        // Record ids are local to a corpus (SEMANTICS section 3.8); the same
+        // `ADR-0001` exists in every repository, so this is under-specified.
+        eprintln!(
+            "greentopo: `show` names one record in one corpus; use -C <repo>, not `--all-repos`"
+        );
+        return E_USAGE;
+    }
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    let Some(adr) = l.graph.corpus().adr(&id) else {
+        let names: Vec<&str> = l
+            .graph
+            .corpus()
+            .adrs
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect();
+        let sug = greentopo_core::model::suggest(&id, names);
+        if args.json {
+            println!(
+                "{}",
+                render::show_unknown_json(&id, sug.map(|s| s.to_string()))
+            );
+        } else {
+            eprintln!("greentopo: no such ADR `{}`", id);
+            if let Some(s) = sug {
+                eprintln!("  did you mean {}? A suggestion is advisory.", s);
+            }
+        }
+        return 7;
+    };
+    if args.json {
+        println!("{}", render::show_json(&l.graph, adr));
+    } else {
+        print!("{}", render::show_text(&l.graph, adr));
+    }
+    0
+}
+
+fn cmd_history(args: &Args) -> i32 {
+    let key = match one_positional(args, "a decision key") {
+        Ok(k) => k,
+        Err(c) => return c,
+    };
+    if args.all_repos {
+        return all_repos(args, |loaded, _| {
+            render::history_in(loaded, &key, args.scope.as_deref())
+        });
+    }
+    let shown = args.scope.as_deref().unwrap_or(DEFAULT_SCOPE).to_string();
+    let l = match loaded(args) {
+        Ok(l) => l,
+        Err(c) => return c,
+    };
+    // Both rejections used to print to stderr and return 7 with nothing on
+    // stdout, so `history --json` answered a machine caller with silence.
+    if !l.graph.registry().has_key(&key) {
+        let names: Vec<&str> = l
+            .graph
+            .registry()
+            .keys
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect();
+        let sug = greentopo_core::model::suggest(&key, names).map(|s| s.to_string());
+        if args.json {
+            println!("{}", render::history_unknown_json("key", &key, &shown, sug));
+        } else {
+            eprintln!("greentopo: `{}` is not a registered decision key", key);
+            if let Some(g) = &sug {
+                eprintln!("  did you mean `{}`? A suggestion is advisory.", g);
+            }
+        }
+        return 7;
+    }
+    let Some(scope) = args.scope.as_deref() else {
+        if args.json {
+            println!("{}", render::history_default_json(&l.graph, &key));
+        } else {
+            print!("{}", render::history_default_text(&l.graph, &key));
+        }
+        return 0;
+    };
+    if !l.graph.registry().has_scope(scope) {
+        let names: Vec<&str> = l
+            .graph
+            .registry()
+            .scopes
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let sug = greentopo_core::model::suggest(scope, names).map(|name| name.to_string());
+        if args.json {
+            println!(
+                "{}",
+                render::history_unknown_json("scope", &key, scope, sug)
+            );
+        } else {
+            eprintln!("greentopo: `{}` is not a declared scope", scope);
+            if let Some(g) = &sug {
+                eprintln!("  did you mean `{}`? A suggestion is advisory.", g);
+            }
+        }
+        return 7;
+    }
+    let slot = Slot { key: &key, scope };
+    let chain = l.graph.history(slot);
+    if args.json {
+        println!("{}", render::history_json(&l.graph, slot, &chain));
+    } else {
+        print!("{}", render::history_text(&l.graph, slot, &chain));
+    }
+    0
+}
+
+fn cmd_migrate(args: &Args) -> i32 {
+    let dir = match one_positional(args, "a directory of ADR files") {
+        Ok(d) => d,
+        Err(c) => return c,
+    };
+    match migrate::audit(&args.dir.join(dir)) {
+        Ok(a) => {
+            if args.json {
+                println!("{}", migrate::json(&a));
+            } else {
+                print!("{}", migrate::text(&a));
+            }
+            0
+        }
+        Err(e) => {
+            emit_error(args, E_INVALID, &e, &[]);
+            E_INVALID
+        }
+    }
+}
+
+/// Silences the unused-import warning when `Verdict` is only matched in render.
+#[allow(dead_code)]
+fn _assert_verdict_in_scope(v: &Verdict) -> i32 {
+    v.exit()
+}
