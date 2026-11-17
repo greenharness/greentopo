@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 branch: feat/aval-becomes-greentopo
 repos: [aval, decisions]
 adrs: [ADR-0072, ADR-0073, ADR-0074]
@@ -199,7 +199,7 @@ Run `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`,
 `scripts/npm-pack.sh` into a scratch dir (lists `@greenharness/greentopo` +
 six `@greenharness/greentopo-<platform>`). Commit, review (F4b), land, PR, merge on green.
 
-### Phase 3 — release 2.0.0 — [ ] next
+### Phase 3 — release 2.0.0 — [x] done 2026-11-17
 
 Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo.rb`, `Formula/aval.rb`, `formula_renames.json`, and `decisions/docs/programmes/topo-spotter-rename/map.md`.
 
@@ -255,6 +255,13 @@ Files: `.github/workflows/adr.yaml` (follow-up PR), the tap's `Formula/greentopo
 | `greentopo mcp`, `tools/list` | ten `greentopo_*` | server `greentopo` 2.0.0, ten `greentopo_*` |
 | `scripts/npm-pack.sh 2.0.0` on stub archives | `@greenharness/greentopo` + six platforms | 7 package.json, root bin `greentopo`, six optionalDependencies |
 | `--help` width | ≤ 80 columns | widest 79 (test `no_help_line_is_wider_than_80_columns`) |
+
+## Outcome
+
+- v2.0.0 released 2026-11-17 from a958d9d (run 44003398264): GitHub assets (6 archives + SHA256SUMS), npm `@greenharness/greentopo` + six platforms at 2.0.0, tap `Formula/greentopo.rb` at 2.0.0 with `verify-brew` passing, and crates `greentopo-core` and `greentopo` at 2.0.0.
+- crates.io refused the first attempt with 403, because the 2026-09-12 token was scoped to the aval crates. The person set a new token, and the re-run of the job published both crates.
+- The `adr.yaml` pin is back on the 2.0.0 download (greentopo#61), the tap seed is homebrew-tap#16, and the map note is decisions#221.
+- The released x86_64-apple-darwin binary prints `greentopo 2.0.0` and passes `greentopo check` here, with one fallback warning.
 
 ## After release
 
