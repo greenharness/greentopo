@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`heads --write` writes tables prettier leaves alone.** Each table is
+  padded to its widest cell with a matching delimiter row, and a code span in
+  a cell takes the fence prettier prints (``` ``x`` ``` becomes `` `x` ``), so a
+  pack refresh no longer fails a repository's prettier gate. `heads` on stdout
+  is unchanged. Canonicalisation now also treats a code span's fence as
+  formatting (SEMANTICS §12.2), so a `HEADS.md` written by an earlier version
+  stays current and is not rewritten. The reverse does not hold: an earlier
+  `heads --check` reads a file this version wrote as stale wherever a code
+  span's fence narrowed, so move a repository's CI pin (`AVAL_VERSION` or
+  `GREENTOPO_VERSION`) in the same commit as its first refresh, as the 2.0.0
+  banner already requires.
+
 ## v2.0.0
 
 ### Changed

@@ -172,7 +172,7 @@ pub fn write(l: &Loaded) -> std::io::Result<Wrote> {
     if matches!(freshness(l), Freshness::Current) {
         return Ok(Wrote::Unchanged);
     }
-    std::fs::write(path(l), project::render(&l.graph))?;
+    std::fs::write(path(l), project::align(&project::render(&l.graph)))?;
     Ok(Wrote::Written)
 }
 

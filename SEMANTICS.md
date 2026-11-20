@@ -1299,6 +1299,7 @@ Canonicalisation normalises exactly these, and nothing else:
 | padding inside a table cell | |
 | the delimiter row's style, including alignment markers | |
 | a backslash escape of ASCII punctuation in a table cell | a formatter adds or drops them, and `\*` and `*` say the same thing |
+| a code span's fence in a table cell | ``` ``x`` ``` and `` `x` `` are one span; compared in prettier's form (below) |
 
 Everything else survives into the comparison. A row added, removed, reordered
 or altered is stale; so is an edited banner, an edited heading, or added prose.
@@ -1322,6 +1323,18 @@ the file and to the projection.
 `choice` and `reason` MUST be single-line: a table row has no escape for a
 newline, and one would split a record across several rows. That is a Layer A
 error, reported with its line.
+
+`heads --write` writes the projection already formatted the way prettier
+formats markdown: each table padded to its widest cell (three columns at
+least, a wide character or an emoji counting two) and its delimiter row
+dashed to the same width, and each code span in a cell fenced as prettier
+fences it: the shortest run of backticks its text does not contain, padded
+with a space only where its text starts or ends with a backtick, or starts and
+ends with a space. Both are formatting by the table above, so the file it
+writes and `heads` on stdout, which stays compact and keeps each record's own
+fence, state the same thing, and a file written by an earlier version stays
+current. prettier's backslash escapes (`*` as `\*`) are not reproduced; they
+are formatting too, so a file prettier escaped is still current.
 
 `heads --write` leaves a file alone when it already states the projection, so a
 formatter's output is not undone on every run. **Anything not already current
