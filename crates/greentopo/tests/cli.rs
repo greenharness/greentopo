@@ -262,13 +262,17 @@ fn corpus_with_heads(name: &str) -> PathBuf {
 fn a_formatted_projection_stays_current_and_keeps_its_bytes() {
     let r = corpus_with_heads("heads-formatted");
     let p = r.join("docs/adr/HEADS.md");
-    let canonical = fs::read_to_string(&p).unwrap();
+    // `heads` on stdout is the compact render; `--write` pads it. Start from
+    // the compact one so the file differs from what `--write` would emit.
+    let canonical = run(&r, &["heads"]).out;
+    assert_ne!(fs::read_to_string(&p).unwrap(), canonical);
 
-    // Prettier's shape: padded cells, a rewritten delimiter row.
+    // Another formatter's shape: padded cells, a delimiter row unlike the one
+    // `--write` emits, so keeping the bytes is observable.
     let formatted = canonical
         .replace(
             "| Key | Scope | Record | Decision |\n|---|---|---|---|",
-            "| Key | Scope | Record   | Decision |\n| --- | ----- | -------- | -------- |",
+            "| Key | Scope | Record   | Decision |\n|-----|-------|----------|----------|",
         )
         .replace(
             "| a.b | — | ADR-0001 | One |",
@@ -366,6 +370,31 @@ fn heads_speaks_json_on_stdout() {
     assert!(got.out.contains("\"state\":\"written\""), "{}", got.out);
     let got = run(&r, &["heads", "--write", "--json"]);
     assert!(got.out.contains("\"state\":\"unchanged\""), "{}", got.out);
+}
+
+/// A repository that runs prettier over its markdown finds the written file
+/// already formatted, and the gate still calls it current; stdout stays compact.
+#[test]
+fn heads_write_pads_tables_and_stays_current() {
+    let r = scratch("heads-aligned");
+    write(&r, ".adr.yaml", REGISTRY);
+    write(&r, "docs/adr/0001-one.md", NUMBERED);
+
+    assert_eq!(run(&r, &["heads", "--write"]).code, 0);
+    let file = std::fs::read_to_string(r.join("docs/adr/HEADS.md")).unwrap();
+    assert!(
+        file.contains("| Key | Scope | Record   | Decision |\n| --- | ----- | -------- | -------- |\n| a.b | —     | ADR-0001 | One      |\n"),
+        "{}",
+        file
+    );
+    let got = run(&r, &["heads", "--check"]);
+    assert_eq!(got.code, 0, "{}{}", got.out, got.err);
+    let got = run(&r, &["heads"]);
+    assert!(
+        got.out.contains("| a.b | — | ADR-0001 | One |"),
+        "{}",
+        got.out
+    );
 }
 
 // --- keys ------------------------------------------------------------------
