@@ -16,6 +16,13 @@
   `GREENTOPO_VERSION`) in the same commit as its first refresh, as the 2.0.0
   banner already requires.
 
+### Fixed
+
+- **`install.ps1` ends with the steps `install.sh` prints.** Its closing text
+  named `aval-fleet` and `greentopo install`, `list`, `uninstall` and
+  `agents-md`, none of which exist; it now names `greentopo check`, `resolve`
+  and `heads --write`, and the `greengate.conf` line that gates them.
+
 ## v2.0.0
 
 ### Changed

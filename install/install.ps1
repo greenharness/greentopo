@@ -156,23 +156,20 @@ if ($userPath -notlike "*$BinDir*") {
 }
 
 if ($upgrading) {
-    Write-Host '  Upgraded. Hooks already run this binary — nothing per repository'
-    Write-Host '  needs redoing for the checks themselves. What does not update on its'
-    Write-Host "  own: a repository's hook shims when a release changes them, and the"
-    Write-Host '  generated block in AGENTS.md/CLAUDE.md. One command sees both:'
+    Write-Host '  Upgraded. Nothing per repository needs redoing: a gate declared'
+    Write-Host '  in greengate.conf calls this binary by name and picks up the new one.'
     Write-Host ''
-    Write-Host '    aval-fleet fix --root $HOME\source                       # dry run'
-    Write-Host '    aval-fleet fix --root $HOME\source --apply --agents-md'
-    Write-Host ''
-    Write-Host '  or, in one repository:  greentopo install; greentopo agents-md'
+    Write-Host '  If the decision format changed, greentopo check will say so.'
     Write-Host ''
 } else {
-    Write-Host '  Nothing is enabled yet, on purpose. To turn the hooks on:'
+    Write-Host '  Nothing is gated yet, on purpose. In a repository with decisions:'
     Write-Host ''
-    Write-Host '    cd <your-repo>; greentopo install     # this repository only'
-    Write-Host '    greentopo list                        # what would run here'
-    Write-Host '    greentopo uninstall                   # and back out again'
+    Write-Host '    greentopo check                         # every invariant'
+    Write-Host '    greentopo resolve <key>                 # what is decided now'
+    Write-Host '    greentopo heads --write                 # regenerate the projection'
     Write-Host ''
-    Write-Host '  Across many repositories at once:  aval-fleet install --root $HOME\source'
+    Write-Host "  To gate it, add one line to that repository's greengate.conf:"
+    Write-Host ''
+    Write-Host '    pre-commit    adr   *+.adr.yaml   block   greentopo check'
     Write-Host ''
 }
