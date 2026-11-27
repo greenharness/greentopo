@@ -130,7 +130,7 @@ main (`heads --write` tables, the `install.ps1` fix).
 | regression: old file under check | vendored pack whose source moved and now publishes only `aval.pack`, `greentopo add --check` | `behind`, exit 1; at the unchanged vendored commit: `unknown` naming `has no greentopo.pack`, exit 0 | run 2026-11-27: pass |
 | other-version pack | vendored pack keyed `greentopo: "0.1.0"`, `check` and `add --check` (test `a_vendored_pack_written_by_another_generator_version_is_current`); the moved-revision case is `the_generator_version_is_not_a_declaration`, which already exists | exit 0, `current`; `current (moved)`, not `behind` | run 2026-11-27: pass |
 | piloted run | branch binary `check`, `heads --check` and `add --check` in this repository and decisions (producer `pack --check` is expected to report `pack-fresh` once Phase 2 bumps the version); branch binary `check` in the working tree of every checkout under `~/Developer/Perso` with `.adr/packs`, worktrees included | exit 0, no `warning:` or finding naming `aval`; a hit in this repository is re-vendored with `greentopo add <source>`; a hit in another repository is listed in the report (stale worktree, or live checkout behind its origin) and re-vendored only through that repository's own t22 PR | not passed: 21 working trees hold an `aval:` pack (stale worktrees, plus live `customer-vision` and `duro-operator`); each is reported, none re-vendored in this PR |
-| no old-name reader left | `git grep -nE 'LEGACY_(KEY|FILE)|PackWarning|OldName|aval\.pack' -- crates ':!crates/*/tests'` (the regression tests write `aval.pack` on purpose) | no hit |
+| no old-name reader left | `git grep -nE 'LEGACY_(KEY|FILE)|PackWarning|OldName|aval\.pack' -- crates ':!crates/*/tests'` (the regression tests write `aval.pack` on purpose) | no hit | run 2026-11-27: no hit outside tests |
 | release published | tag `v3.0.0`; each release job's `conclusion`; crates.io `greentopo-core` max version; release binary `--version` | tag exists on main's release commit; `success`; `3.0.0`; `greentopo 3.0.0` | not run (Phase 2) |
 
 ## Decision log
@@ -154,5 +154,13 @@ main (`heads --write` tables, the `install.ps1` fix).
 ## Carried into implementation
 
 Medium and low findings of round 2, not edited in: widen the census to every remote branch (architect#1, found 2026-11-27: only stale feature branches and worktrees, plus live checkouts `customer-vision` and `duro-operator`, still carry `aval:`); session-hook line check (tui#1); `add --check` exit codes, 0 for unknown and 1 for behind (unix#1); cite ADR-0071 `harness.renames` (architect#2); name `E_FAIL` for the `add` failure (unix#2).
+
+## Implementation review
+
+- implementation-review: round 1 approve-with-changes (5 findings, all fixed); delta approve-with-changes (1 low row Actual, fixed); 20 candidates fine.
+- backend: approve-with-changes then approve; unchanged-commit `unknown` test added, git failure no longer read as a missing pack.
+- lang:rust: approve-with-changes then approve; core test pins layer and check id, wrapper removed.
+- unix: approve-with-changes then approve; stdout and stderr pinned per command; `--json` errors on stdout filed as a follow-up (deliberate: shipped contract).
+- tui, architect, po sat the plan only.
 
 <!-- panel: repos=aval adds=contract reviewers=backend,lang:rust,tui,unix,architect,po body-sha=641e6aad3bc3 -->
