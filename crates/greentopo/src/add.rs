@@ -59,11 +59,6 @@ pub struct Vendored {
     pub keys: Vec<String>,
 }
 
-/// The pack a source publishes, at one resolved commit.
-fn fetch_published(source: &Source, id: &str, into: &Path) -> Result<String, String> {
-    fetch::fetch(source, id, into, pack::FILE)
-}
-
 /// The provenance header. Comments, so the parser skips them and the file is
 /// still exactly the pack the producer published plus a note saying where it
 /// came from.
@@ -118,7 +113,7 @@ pub fn resolve_one(spec: &str, as_name: Option<&str>) -> Result<Vendored, String
     }
 
     let scratch = Scratch::new(&name);
-    let body = fetch_published(&source, &id, &scratch.0)?;
+    let body = fetch::fetch(&source, &id, &scratch.0, pack::FILE)?;
 
     let rel = format!("{}/{}.{}", DIR, name, EXT);
     // Parse before writing, with the parser the loader itself uses. A pack
@@ -574,7 +569,7 @@ pub fn standing(root: &Path, o: &Origin) -> Standing {
 /// `Unknown` would hide a real move under `--quiet`.
 fn moved(root: &Path, o: &Origin, source: &Source, id: String) -> Standing {
     let scratch = Scratch::new(&format!("{}-moved", o.name));
-    let Ok(published) = fetch_published(source, &id, &scratch.0) else {
+    let Ok(published) = fetch::fetch(source, &id, &scratch.0, pack::FILE) else {
         return Standing::Behind(id);
     };
     match std::fs::read_to_string(root.join(&o.rel)) {
@@ -615,7 +610,7 @@ fn declares_the_same_but_generator(a: &str, b: &str) -> bool {
 /// somebody changed what this repository believes another repository decided.
 fn unedited(root: &Path, o: &Origin, source: &Source) -> Standing {
     let scratch = Scratch::new(&o.name);
-    let published = match fetch_published(source, &o.commit, &scratch.0) {
+    let published = match fetch::fetch(source, &o.commit, &scratch.0, pack::FILE) {
         Ok(p) => p,
         Err(e) => return Standing::Unknown(e),
     };

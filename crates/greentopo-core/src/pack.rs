@@ -805,8 +805,9 @@ mod tests {
         let text = render(&corpus()).replacen("greentopo:", "aval:", 1);
         let f = parse(".adr/packs/fleet.pack", "fleet", &text).expect_err("refused");
         assert!(
-            f.iter()
-                .any(|x| x.to_string().contains("unknown pack field `aval`")),
+            f.iter().any(|x| x.layer == Layer::A
+                && x.check == "pack-parses"
+                && x.message.contains("unknown pack field `aval`")),
             "{f:?}"
         );
     }

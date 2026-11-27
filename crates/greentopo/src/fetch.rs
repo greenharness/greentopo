@@ -356,12 +356,18 @@ pub fn fetch(s: &Source, id: &str, into: &Path, file: &str) -> Result<String, St
             s.label, s.rev, id, got
         ));
     }
-    let object = format!("FETCH_HEAD:{}", file);
-    // Absent only when the object is not there; any other failure of `show`
-    // is a real error and says so.
-    if git(&["cat-file", "-e", &object], Some(into)).is_err() {
+    // `ls-tree` prints nothing for a path the commit does not have and fails
+    // only when git itself does, so a missing pack is never confused with a
+    // git that could not answer.
+    let listed = git(
+        &["ls-tree", "--name-only", "FETCH_HEAD", "--", file],
+        Some(into),
+    )
+    .map_err(|e| format!("{}: cannot read {} at {}: {}", s.label, file, short(id), e))?;
+    if listed.trim().is_empty() {
         return Err(format!("{}: has no {} at {}", s.label, file, short(id)));
     }
+    let object = format!("FETCH_HEAD:{}", file);
     git(&["show", &object], Some(into))
         .map_err(|e| format!("{}: cannot read {} at {}: {}", s.label, file, short(id), e))
 }

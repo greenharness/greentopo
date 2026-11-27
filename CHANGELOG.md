@@ -20,9 +20,8 @@
   - the `uses the old \`aval:\` key` and `publishes aval.pack` notices are
     gone, and `check --json` no longer carries a `pack-legacy-key` entry under
     `warnings`;
-  - `greentopo-core` drops `pack::LEGACY_FILE`, `pack::LEGACY_KEY`,
-    `pack::PackWarning` and `Pack::warnings`, and `add::standing` returns the
-    standing alone.
+  - the `greentopo-core` crate drops `pack::LEGACY_FILE`, `pack::LEGACY_KEY`,
+    `pack::PackWarning` and `Pack::warnings`.
 
   A vendored pack's `greentopo:` generator value was never compared with the
   running version, and `HEADS.md` carries none, so packs and `HEADS.md` written

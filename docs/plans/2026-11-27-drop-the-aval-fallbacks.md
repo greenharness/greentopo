@@ -97,7 +97,7 @@ main (`heads --write` tables, the `install.ps1` fix).
 
 ## Phases
 
-- [ ] Phase 1 — remove the fallback read and its notices:
+- [x] Phase 1 — remove the fallback read and its notices:
   `crates/greentopo-core/src/pack.rs` (constants, `PackWarning`,
   `Pack::warnings`, the key reader, doc comments; the two legacy unit tests
   replaced by one asserting `parse` returns `Err` with `unknown pack field \`aval\``),
@@ -122,16 +122,16 @@ main (`heads --write` tables, the `install.ps1` fix).
 
 ## Verification
 
-| Check | Input | Expected |
-|---|---|---|
-| build and lint | `make check` (fmt, clippy `-D warnings`, tests) | exit 0 |
-| regression: old key | consumer with an `aval:`-keyed vendored pack, `greentopo check` and `greentopo resolve` | exit 3 for each, finding names `aval` on stderr |
-| regression: old file | source publishing only `aval.pack`, `greentopo add` | non-zero exit, `has no greentopo.pack` |
-| regression: old file under check | vendored pack whose source now publishes only `aval.pack`, `greentopo add --check` | `unknown` naming `has no greentopo.pack` |
-| other-version pack | vendored pack keyed `greentopo: "0.1.0"`, `check` and `add --check`; and one vendored as `"2.0.0"` whose source moved to the same declarations as `"3.0.0"`, `add --check` | exit 0, `current`; `current (moved)`, not `behind` |
-| piloted run | branch binary `check`, `heads --check` and `add --check` in this repository and decisions (producer `pack --check` is expected to report `pack-fresh` once Phase 2 bumps the version); branch binary `check` in the working tree of every checkout under `~/Developer/Perso` with `.adr/packs`, worktrees included | exit 0, no `warning:` or finding naming `aval`; a hit in this repository is re-vendored with `greentopo add <source>`; a hit in another repository is listed in the report (stale worktree, or live checkout behind its origin) and re-vendored only through that repository's own t22 PR |
+| Check | Input | Expected | Actual |
+|---|---|---|---|
+| build and lint | `make check` (fmt, clippy `-D warnings`, tests) | exit 0 | run 2026-11-27: pass |
+| regression: old key | consumer with an `aval:`-keyed vendored pack, `greentopo check` and `greentopo resolve` | exit 3 for each, finding names `aval` on stderr | run 2026-11-27: pass |
+| regression: old file | source publishing only `aval.pack`, `greentopo add` | non-zero exit, `has no greentopo.pack` | run 2026-11-27: pass |
+| regression: old file under check | vendored pack whose source moved and now publishes only `aval.pack`, `greentopo add --check` | `behind`, exit 1; at the unchanged vendored commit: `unknown` naming `has no greentopo.pack`, exit 0 | run 2026-11-27: pass |
+| other-version pack | vendored pack keyed `greentopo: "0.1.0"`, `check` and `add --check` (test `a_vendored_pack_written_by_another_generator_version_is_current`); the moved-revision case is `the_generator_version_is_not_a_declaration`, which already exists | exit 0, `current`; `current (moved)`, not `behind` | run 2026-11-27: pass |
+| piloted run | branch binary `check`, `heads --check` and `add --check` in this repository and decisions (producer `pack --check` is expected to report `pack-fresh` once Phase 2 bumps the version); branch binary `check` in the working tree of every checkout under `~/Developer/Perso` with `.adr/packs`, worktrees included | exit 0, no `warning:` or finding naming `aval`; a hit in this repository is re-vendored with `greentopo add <source>`; a hit in another repository is listed in the report (stale worktree, or live checkout behind its origin) and re-vendored only through that repository's own t22 PR | not passed: 21 working trees hold an `aval:` pack (stale worktrees, plus live `customer-vision` and `duro-operator`); each is reported, none re-vendored in this PR |
 | no old-name reader left | `git grep -nE 'LEGACY_(KEY|FILE)|PackWarning|OldName|aval\.pack' -- crates ':!crates/*/tests'` (the regression tests write `aval.pack` on purpose) | no hit |
-| release published | tag `v3.0.0`; each release job's `conclusion`; crates.io `greentopo-core` max version; release binary `--version` | tag exists on main's release commit; `success`; `3.0.0`; `greentopo 3.0.0` |
+| release published | tag `v3.0.0`; each release job's `conclusion`; crates.io `greentopo-core` max version; release binary `--version` | tag exists on main's release commit; `success`; `3.0.0`; `greentopo 3.0.0` | not run (Phase 2) |
 
 ## Decision log
 

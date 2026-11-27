@@ -1245,14 +1245,33 @@ fn a_pack_keyed_aval_is_refused_by_every_command_that_loads_the_corpus() {
     let fleet = producer("old-key-fleet");
     let c = consumer_with_aval_pack("old-key-consumer", &fleet);
 
-    for args in [&["check"][..], &["heads"], &["check", "--json"]] {
+    for args in [&["check"][..], &["heads"], &["resolve", "release.trigger"]] {
         let got = run(&c, args);
         assert_eq!(got.code, 3, "{args:?}: {}", got.all());
         assert!(
-            got.err.contains("unknown pack field `aval`") || got.out.contains("`aval`"),
+            got.err.contains("unknown pack field `aval`"),
             "{args:?}: {}",
             got.all()
         );
+        assert_eq!(got.out, "", "{args:?}: {}", got.out);
+        assert!(
+            !got.all().contains("pack-legacy-key") && !got.all().contains("old `aval:` key"),
+            "{args:?}: {}",
+            got.all()
+        );
+    }
+    for args in [
+        &["check", "--json"][..],
+        &["resolve", "release.trigger", "--json"],
+    ] {
+        let got = run(&c, args);
+        assert_eq!(got.code, 3, "{args:?}: {}", got.all());
+        assert!(
+            got.out.contains("\"pack-parses\"") && got.out.contains("unknown pack field `aval`"),
+            "{args:?}: {}",
+            got.out
+        );
+        assert_eq!(got.err, "", "{args:?}: {}", got.err);
         assert!(
             !got.all().contains("pack-legacy-key") && !got.all().contains("old `aval:` key"),
             "{args:?}: {}",
@@ -1271,6 +1290,45 @@ fn add_refuses_a_source_that_publishes_only_aval_pack() {
     assert!(got.err.contains("has no greentopo.pack"), "{}", got.err);
     assert_eq!(got.out, "", "{}", got.out);
     assert!(!c.join(".adr/packs/fleet.pack").exists());
+}
+
+#[test]
+fn add_check_at_a_vendored_commit_with_only_aval_pack_is_unknown() {
+    // A pack vendored from `aval.pack` under the new key: the commit it names
+    // has no `greentopo.pack`, so its standing cannot be read.
+    let fleet = producer("old-file-unknown-fleet");
+    let c = vendored_from(&fleet, "old-file-unknown-consumer");
+    let current = fs::read_to_string(fleet.join("greentopo.pack")).unwrap();
+    write(&fleet, "aval.pack", &current);
+    fs::remove_file(fleet.join("greentopo.pack")).unwrap();
+    commit_all(&fleet, "publish under the old file name only");
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&fleet)
+        .output()
+        .unwrap();
+    let head = String::from_utf8(head.stdout).unwrap().trim().to_string();
+    let rel = ".adr/packs/fleet.pack";
+    let vendored = fs::read_to_string(c.join(rel)).unwrap();
+    let repointed: String = vendored
+        .lines()
+        .map(|l| {
+            if l.starts_with("# commit: ") {
+                format!("# commit: {head}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(repointed, vendored);
+    write(&c, rel, &repointed);
+
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.out.contains("unknown"), "{}", got.out);
+    assert!(got.out.contains("has no greentopo.pack"), "{}", got.out);
 }
 
 #[test]
