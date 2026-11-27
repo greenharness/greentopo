@@ -1210,7 +1210,7 @@ fn a_hand_edited_pack_whose_source_moved_is_behind() {
     assert!(got.out.contains("behind"), "{}", got.out);
 }
 
-// The fallback read for packs written under the old name.
+// The old name is not read: the fallback `greentopo` 2.0.0 kept was removed.
 
 /// The text of a pack with its generator key under the old name.
 fn aval_keyed(pack: &str) -> String {
@@ -1220,7 +1220,7 @@ fn aval_keyed(pack: &str) -> String {
 }
 
 /// A producer that publishes `aval.pack` only, keyed `aval:`.
-fn legacy_producer(name: &str) -> PathBuf {
+fn aval_only_producer(name: &str) -> PathBuf {
     let p = producer(name);
     let current = fs::read_to_string(p.join("greentopo.pack")).unwrap();
     write(&p, "aval.pack", &aval_keyed(&current));
@@ -1230,156 +1230,155 @@ fn legacy_producer(name: &str) -> PathBuf {
     p
 }
 
-/// A producer that publishes `aval.pack` and keeps its `greentopo.pack`.
-fn dual_producer(name: &str) -> PathBuf {
-    let p = producer(name);
-    let current = fs::read_to_string(p.join("greentopo.pack")).unwrap();
-    write(&p, "aval.pack", &aval_keyed(&current));
-    git(&p, &["add", "-A"]);
-    git(&p, &["commit", "-qm", "publish under both names"]);
-    p
-}
-
-fn warning_lines(stderr: &str) -> Vec<&str> {
-    stderr
-        .lines()
-        .filter(|l| l.starts_with("warning:"))
-        .collect()
-}
-
-/// A consumer that vendored a pack keyed `aval:` from a source recorded in its
-/// banner, as a repository committed before the rename holds it.
+/// A consumer whose vendored pack is keyed `aval:`.
 fn consumer_with_aval_pack(name: &str, fleet: &Path) -> PathBuf {
     let c = consumer_pack_only(name);
     assert_eq!(run(&c, &["add", "--as", "fleet", &src(fleet)]).code, 0);
     let rel = ".adr/packs/fleet.pack";
     let vendored = fs::read_to_string(c.join(rel)).unwrap();
-    let keyed = if vendored.contains("\naval:") {
-        vendored
-    } else {
-        aval_keyed(&vendored)
-    };
-    write(&c, rel, &keyed);
+    write(&c, rel, &aval_keyed(&vendored));
     c
 }
 
 #[test]
-fn check_reads_an_aval_keyed_pack_with_one_warning() {
-    let fleet = producer("legacy-key-fleet");
-    let c = consumer_with_aval_pack("legacy-key-consumer", &fleet);
+fn a_pack_keyed_aval_is_refused_by_every_command_that_loads_the_corpus() {
+    let fleet = producer("old-key-fleet");
+    let c = consumer_with_aval_pack("old-key-consumer", &fleet);
+
+    for args in [&["check"][..], &["heads"], &["resolve", "release.trigger"]] {
+        let got = run(&c, args);
+        assert_eq!(got.code, 3, "{args:?}: {}", got.all());
+        assert!(
+            got.err.contains("unknown pack field `aval`"),
+            "{args:?}: {}",
+            got.all()
+        );
+        assert_eq!(got.out, "", "{args:?}: {}", got.out);
+        assert!(
+            !got.all().contains("pack-legacy-key") && !got.all().contains("old `aval:` key"),
+            "{args:?}: {}",
+            got.all()
+        );
+    }
+    for args in [
+        &["check", "--json"][..],
+        &["resolve", "release.trigger", "--json"],
+    ] {
+        let got = run(&c, args);
+        assert_eq!(got.code, 3, "{args:?}: {}", got.all());
+        assert!(
+            got.out.contains("\"pack-parses\"") && got.out.contains("unknown pack field `aval`"),
+            "{args:?}: {}",
+            got.out
+        );
+        assert_eq!(got.err, "", "{args:?}: {}", got.err);
+        assert!(
+            !got.all().contains("pack-legacy-key") && !got.all().contains("old `aval:` key"),
+            "{args:?}: {}",
+            got.all()
+        );
+    }
+}
+
+#[test]
+fn add_refuses_a_source_that_publishes_only_aval_pack() {
+    let fleet = aval_only_producer("old-file-fleet");
+    let c = consumer_pack_only("old-file-consumer");
+
+    let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.err.contains("has no greentopo.pack"), "{}", got.err);
+    assert_eq!(got.out, "", "{}", got.out);
+    assert!(!c.join(".adr/packs/fleet.pack").exists());
+}
+
+#[test]
+fn add_check_at_a_vendored_commit_with_only_aval_pack_is_unknown() {
+    // A pack vendored from `aval.pack` under the new key: the commit it names
+    // has no `greentopo.pack`, so its standing cannot be read.
+    let fleet = producer("old-file-unknown-fleet");
+    let c = vendored_from(&fleet, "old-file-unknown-consumer");
+    let current = fs::read_to_string(fleet.join("greentopo.pack")).unwrap();
+    write(&fleet, "aval.pack", &current);
+    fs::remove_file(fleet.join("greentopo.pack")).unwrap();
+    commit_all(&fleet, "publish under the old file name only");
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&fleet)
+        .output()
+        .unwrap();
+    let head = String::from_utf8(head.stdout).unwrap().trim().to_string();
+    let rel = ".adr/packs/fleet.pack";
+    let vendored = fs::read_to_string(c.join(rel)).unwrap();
+    let repointed: String = vendored
+        .lines()
+        .map(|l| {
+            if l.starts_with("# commit: ") {
+                format!("# commit: {head}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(repointed, vendored);
+    write(&c, rel, &repointed);
+
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.out.contains("unknown"), "{}", got.out);
+    assert!(got.out.contains("has no greentopo.pack"), "{}", got.out);
+}
+
+#[test]
+fn add_check_reads_a_source_that_moved_to_aval_pack_only_as_behind() {
+    let fleet = producer("old-file-check-fleet");
+    let c = vendored_from(&fleet, "old-file-check-consumer");
+
+    // Nothing moved: the vendored commit still has `greentopo.pack`.
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 0, "{}", got.all());
+    assert!(got.out.contains("current"), "{}", got.out);
+
+    // A later commit that only has `aval.pack`: the revision moved, and the
+    // fetch of the new name fails, which reads `behind`.
+    let current = fs::read_to_string(fleet.join("greentopo.pack")).unwrap();
+    write(&fleet, "aval.pack", &aval_keyed(&current));
+    fs::remove_file(fleet.join("greentopo.pack")).unwrap();
+    commit_all(&fleet, "publish under the old name only");
+    let got = run(&c, &["add", "--check"]);
+    assert_eq!(got.code, 1, "{}", got.all());
+    assert!(got.out.contains("behind"), "{}", got.out);
+}
+
+#[test]
+fn a_vendored_pack_written_by_another_generator_version_is_current() {
+    // The version a pack names is the generator's, never compared with the
+    // running one: a pack written by 2.0.0 reads the same under 3.0.0.
+    let fleet = producer("other-version-fleet");
+    let pack = fs::read_to_string(fleet.join("greentopo.pack")).unwrap();
+    let older: String = pack
+        .lines()
+        .map(|l| {
+            if l.starts_with("greentopo: ") {
+                "greentopo: \"0.1.0\"".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    assert_ne!(older, pack);
+    fs::write(fleet.join("greentopo.pack"), older).unwrap();
+    commit_all(&fleet, "an older generator");
+    let c = vendored_from(&fleet, "other-version-consumer");
 
     let got = run(&c, &["check"]);
     assert_eq!(got.code, 0, "{}", got.all());
-    let warnings = warning_lines(&got.err);
-    assert_eq!(warnings.len(), 1, "{}", got.err);
-    assert!(
-        warnings[0].contains("greentopo add") && warnings[0].contains(&src(&fleet)),
-        "{}",
-        warnings[0]
-    );
-    // Vendored under `--as fleet`: the command names it again, or `add`
-    // would write a second pack and this one would keep warning.
-    assert!(warnings[0].contains("--as fleet`"), "{}", warnings[0]);
-    assert!(!got.out.contains("warning:"), "{}", got.out);
-
-    let quiet = run(&c, &["check", "--quiet"]);
-    assert_eq!(quiet.code, 0, "{}", quiet.all());
-    assert!(warning_lines(&quiet.err).is_empty(), "{}", quiet.err);
-}
-
-#[test]
-fn check_json_holds_the_notice_in_warnings() {
-    let fleet = producer("legacy-json-fleet");
-    let c = consumer_with_aval_pack("legacy-json-consumer", &fleet);
-
-    let got = run(&c, &["check", "--json"]);
-    assert_eq!(got.code, 0, "{}", got.all());
-    assert!(warning_lines(&got.err).is_empty(), "{}", got.err);
-    let start = got.out.find("\"warnings\"").expect("a warnings array");
-    assert!(
-        got.out[start..].contains("uses the old `aval:` key"),
-        "{}",
-        got.out
-    );
-}
-
-#[test]
-fn add_vendors_a_source_that_publishes_only_the_old_name() {
-    let fleet = legacy_producer("legacy-file-fleet");
-    let c = consumer_pack_only("legacy-file-consumer");
-
-    let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
-    assert_eq!(got.code, 0, "{}", got.all());
-    let warnings = warning_lines(&got.err);
-    assert_eq!(warnings.len(), 1, "{}", got.err);
-    assert!(
-        warnings[0].contains("greentopo pack --write"),
-        "{}",
-        warnings[0]
-    );
-    let published = fs::read_to_string(fleet.join("aval.pack")).unwrap();
-    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
-    assert!(
-        vendored.ends_with(&published),
-        "vendored bytes are the published ones"
-    );
-}
-
-#[test]
-fn add_check_against_an_old_name_source_is_current_with_one_warning() {
-    let fleet = legacy_producer("legacy-check-fleet");
-    let c = consumer_pack_only("legacy-check-consumer");
-    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
-
+    assert!(!got.all().contains("warning:"), "{}", got.all());
     let got = run(&c, &["add", "--check"]);
     assert_eq!(got.code, 0, "{}", got.all());
     assert!(got.out.contains("current"), "{}", got.out);
-    assert!(!got.out.contains("unknown"), "{}", got.out);
-    let warnings = warning_lines(&got.err);
-    assert_eq!(warnings.len(), 1, "{}", got.err);
-    assert!(
-        warnings[0].contains("greentopo pack --write"),
-        "{}",
-        warnings[0]
-    );
-
-    let quiet = run(&c, &["add", "--check", "--quiet"]);
-    assert_eq!(quiet.code, 0, "{}", quiet.all());
-    assert_eq!(quiet.out, "", "{}", quiet.out);
-    assert!(warning_lines(&quiet.err).is_empty(), "{}", quiet.err);
-}
-
-#[test]
-fn a_source_publishing_both_names_is_read_from_the_new_one() {
-    let fleet = dual_producer("legacy-both-fleet");
-    let c = consumer_pack_only("legacy-both-consumer");
-
-    let got = run(&c, &["add", "--as", "fleet", &src(&fleet)]);
-    assert_eq!(got.code, 0, "{}", got.all());
-    assert!(warning_lines(&got.err).is_empty(), "{}", got.err);
-    let published = fs::read_to_string(fleet.join("greentopo.pack")).unwrap();
-    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
-    assert!(vendored.ends_with(&published));
-}
-
-#[test]
-fn a_source_that_republishes_under_the_new_name_is_current_without_a_warning() {
-    let fleet = legacy_producer("legacy-moved-fleet");
-    let c = consumer_pack_only("legacy-moved-consumer");
-    assert_eq!(run(&c, &["add", "--as", "fleet", &src(&fleet)]).code, 0);
-    let vendored = fs::read_to_string(c.join(".adr/packs/fleet.pack")).unwrap();
-    assert!(vendored.contains("\naval:"), "{}", vendored);
-
-    let published = fs::read_to_string(fleet.join("aval.pack")).unwrap();
-    let renamed = published.replacen("\naval:", "\ngreentopo:", 1);
-    assert_ne!(renamed, published);
-    write(&fleet, "greentopo.pack", &renamed);
-    git(&fleet, &["add", "-A"]);
-    git(&fleet, &["commit", "-qm", "publish under the new name"]);
-
-    let got = run(&c, &["add", "--check"]);
-    assert_eq!(got.code, 0, "{}", got.all());
-    assert!(got.out.contains("current"), "{}", got.out);
-    assert!(got.out.contains("same declarations"), "{}", got.out);
-    assert!(warning_lines(&got.err).is_empty(), "{}", got.err);
 }

@@ -339,15 +339,8 @@ pub fn short(id: &str) -> &str {
 /// arrived against what was resolved catches a ref that moved between the two
 /// calls, which is the case the id exists to close.
 ///
-/// `files` are tried in order against the one fetched commit, and the first
-/// that exists is returned with its name, so the caller can tell which one
-/// answered.
-pub fn fetch<'a>(
-    s: &Source,
-    id: &str,
-    into: &Path,
-    files: &[&'a str],
-) -> Result<(String, &'a str), String> {
+/// `file` is read from the one fetched commit.
+pub fn fetch(s: &Source, id: &str, into: &Path, file: &str) -> Result<String, String> {
     std::fs::create_dir_all(into).map_err(|e| format!("{}: {}", into.display(), e))?;
     git(&["init", "-q"], Some(into)).map_err(|e| format!("{}: {}", s.label, e))?;
     git(&["fetch", "-q", "--depth", "1", &s.url, &s.rev], Some(into))
@@ -363,23 +356,20 @@ pub fn fetch<'a>(
             s.label, s.rev, id, got
         ));
     }
-    for file in files {
-        let object = format!("FETCH_HEAD:{}", file);
-        // Absent only when the object is not there; any other failure of
-        // `show` is a real error and must not fall through to the next name.
-        if git(&["cat-file", "-e", &object], Some(into)).is_err() {
-            continue;
-        }
-        let body = git(&["show", &object], Some(into))
-            .map_err(|e| format!("{}: cannot read {} at {}: {}", s.label, file, short(id), e))?;
-        return Ok((body, file));
+    // `ls-tree` prints nothing for a path the commit does not have and fails
+    // only when git itself does, so a missing pack is never confused with a
+    // git that could not answer.
+    let listed = git(
+        &["ls-tree", "--name-only", "FETCH_HEAD", "--", file],
+        Some(into),
+    )
+    .map_err(|e| format!("{}: cannot read {} at {}: {}", s.label, file, short(id), e))?;
+    if listed.trim().is_empty() {
+        return Err(format!("{}: has no {} at {}", s.label, file, short(id)));
     }
-    Err(format!(
-        "{}: has no {} at {}",
-        s.label,
-        files.join(" or "),
-        short(id)
-    ))
+    let object = format!("FETCH_HEAD:{}", file);
+    git(&["show", &object], Some(into))
+        .map_err(|e| format!("{}: cannot read {} at {}: {}", s.label, file, short(id), e))
 }
 
 /// A scratch directory that removes itself, on the failure path too.

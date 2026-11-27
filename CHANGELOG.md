@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Removed
+
+- **BREAKING: the `aval` fallbacks are gone.** 2.0.0 kept one fallback read for
+  packs written under the old name, and said the fleet sweep would remove it.
+  The sweep is done, so:
+  - a vendored pack keyed `aval:` is refused like any pack with an unknown
+    field. `check`, `resolve`, `heads`, `mcp`, the session hook and every other
+    command that loads the corpus exit 3 (`E_INVALID`) with
+    `unknown pack field \`aval\``, where 2.0.0 exited 0 with a `warning:`.
+    Re-vendor it: `greentopo add <source>`;
+  - `add` and `add --check` fetch `greentopo.pack` only. A source that
+    publishes only `aval.pack` fails `add` (exit 1) with
+    `<source>: has no greentopo.pack at <sha>`; under `add --check` the pack
+    reads `unknown` (unchanged commit, exit 0) or `behind` (revision moved,
+    exit 1);
+  - the `uses the old \`aval:\` key` and `publishes aval.pack` notices are
+    gone, and `check --json` no longer carries a `pack-legacy-key` entry under
+    `warnings`;
+  - the `greentopo-core` crate drops `pack::LEGACY_FILE`, `pack::LEGACY_KEY`,
+    `pack::PackWarning` and `Pack::warnings`.
+
+  A vendored pack's `greentopo:` generator value was never compared with the
+  running version, and `HEADS.md` carries none, so packs and `HEADS.md` written
+  by 2.0.0 stay current. A producer's own published pack does name the
+  generator: run `greentopo pack --write` after upgrading, as on every release.
+
 ### Changed
 
 - **`heads --write` writes tables prettier leaves alone.** Each table is
