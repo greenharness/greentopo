@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.0.1
+
+### Fixed
+
+- The session hook `greentopo hook install` writes said "An greentopo" in
+  three comments, an article the rename's sed carried over from "an aval".
+  They now read "A greentopo"; the script's commands are unchanged, so a
+  repository picks the text up at its next `greentopo hook install`. Doc
+  comments with the same slip are fixed too.
+
 ## v3.0.0
 
 ### Removed

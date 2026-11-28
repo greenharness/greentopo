@@ -4,11 +4,11 @@ version = 3
 
 [[package]]
 name = "greentopo"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "greentopo-core",
 ]
 
 [[package]]
 name = "greentopo-core"
-version = "3.0.0"
+version = "3.0.1"
