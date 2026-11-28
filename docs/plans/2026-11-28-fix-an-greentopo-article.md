@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 branch: fix/hook-template-article
 repos: [aval, decisions]
 adrs: [ADR-0076]
@@ -93,7 +93,7 @@ ticket names is empty in decisions outside history.
 
 ## Phases
 
-- [ ] Phase 1 — fix the article, bump to 3.0.1: `crates/greentopo/src/hook.rs`,
+- [x] Phase 1 — fix the article, bump to 3.0.1: `crates/greentopo/src/hook.rs`,
   `crates/greentopo/src/packfile.rs`, `crates/greentopo/tests/hook.rs` (doc
   comment, plus a new test: an installed script contains `# A greentopo older than`
   and no `An greentopo` / "an `GREENTOPO"; it fails on origin/main),
@@ -101,7 +101,7 @@ ticket names is empty in decisions outside history.
   `version` line 41), `Cargo.lock`, `CHANGELOG.md`; one PR, merged, then tag
   `v3.0.1` (`tag-release`), install it on this machine, print
   `greentopo --version`.
-- [ ] Phase 2 — decisions, started only once the v3.0.1 release workflow's
+- [x] Phase 2 — decisions, started only once the v3.0.1 release workflow's
   `conclusion` is `success` and `gh release view v3.0.1 --repo
   greenharness/greentopo` lists `greentopo-3.0.1-x86_64-unknown-linux-gnu.tar.gz`
   (CI downloads it, ci.yaml:37-46): `greentopo hook install` with 3.0.1 rewrites
@@ -129,12 +129,13 @@ ticket names is empty in decisions outside history.
 | replacements landed | `git grep -niP "\ban [\x60'\"]?green" -- crates` | empty | empty (exit 1) |
 | suites | `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all --check` | pass | pass in the commit gate (27 checks), new test `the_script_uses_the_article_greentopo_takes` ok |
 | piloted hook | branch binary `hook install --write` in a scratch repo, `grep -c "A greentopo" .claude/hooks/greentopo-heads.sh`; `grep -c "An greentopo" .claude/hooks/greentopo-heads.sh` | 3 (lines 17, 103, 133); 0; `diff` against aval's committed 3.0.0 `.claude/hooks/greentopo-heads.sh` changes exactly 4 lines (marker + 3 comments) | 3; 0; 4 lines: the marker and lines 17, 103, 133 |
-| release | `greentopo --version` after install | `greentopo 3.0.1` | |
-| release asset | `gh release view v3.0.1 --repo greenharness/greentopo --json assets` | lists the x86_64-unknown-linux-gnu tarball | |
-| decisions | `git grep -nP -e "\b[Aa]n \x60?greentopo" -e "\b[Aa]n \x60?greenspotter" -- ':!docs/plans' ':!docs/programmes'`; with 3.0.1, `greentopo check`, `greentopo heads --check`, `greentopo pack --check`, `greentopo hook install --check` | grep empty; all four exit 0 | |
+| release | `greentopo --version` after install | `greentopo 3.0.1` | `greentopo 3.0.1` (Homebrew, release workflow `success`) |
+| release asset | `gh release view v3.0.1 --repo greenharness/greentopo --json assets` | lists the x86_64-unknown-linux-gnu tarball | `greentopo-3.0.1-x86_64-unknown-linux-gnu.tar.gz` listed |
+| decisions | `git grep -nP -e "\b[Aa]n \x60?greentopo" -e "\b[Aa]n \x60?greenspotter" -- ':!docs/plans' ':!docs/programmes'`; with 3.0.1, `greentopo check`, `greentopo heads --check`, `greentopo pack --check`, `greentopo hook install --check` | grep empty; all four exit 0 | grep exit 1; check, heads --check, pack --check, hook install --check exit 0 |
 
 ## Implementation review
 
 - aval round 1: approve-with-changes (opus, 49k, 38 s); fixed: Actual cells filled for the rows observed before the push; candidate `r` ruled fine (file convention); Cargo.lock checked as text, two version lines only.
+- decisions round 1: approve-with-changes (opus, 51k, 25 s); fixed here: both phases ticked and the release, asset and decisions Actual cells filled.
 
 <!-- panel: repos=aval,decisions reviewers=backend,lang:rust,platform,tui,unix,codex body-sha=389f8a27baac -->
