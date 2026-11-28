@@ -80,7 +80,7 @@ notes=".claude/greentopo-hook.local.md"
 # person who started it has not installed.
 command -v greentopo >/dev/null 2>&1 || exit 0
 
-# An greentopo older than the one that wrote this script may refuse a registry or a
+# A greentopo older than the one that wrote this script may refuse a registry or a
 # pack written for the newer one, and then every decision below disappears.
 # Say so first and loudly: a session that silently lost its decisions reads as
 # a corpus that has none.
@@ -166,7 +166,7 @@ printf '%s\n' "$heads"
 # The rules the decisions above have adopted, as an index: the ids of the
 # constraints, grouped by prefix, never their text (decisions ADR-0026). Silent
 # when there are none, so a corpus without rules prints what it printed before
-# they existed. An greentopo older than this hook has no `--index`: it falls back
+# they existed. A greentopo older than this hook has no `--index`: it falls back
 # to one full id per line, so the constraints are never silently lost.
 rules=$(greentopo rules --level constraint --index 2>/dev/null) ||
   rules=$(greentopo rules --level constraint 2>/dev/null | awk '{print "  " $2}')
@@ -196,7 +196,7 @@ fi
 # Where this repository declares areas, the lists above leave out rules about
 # traits it does not have. One line says which traits and how many, zeros
 # included, so a filter nobody meant is visible here and not only in a diff.
-# An greentopo without `traits` prints nothing.
+# A greentopo without `traits` prints nothing.
 traits=$(greentopo traits --summary 2>/dev/null) || traits=""
 [ -n "$traits" ] && printf '\n  (%s)\n' "$traits"
 
@@ -208,7 +208,7 @@ fi
 
 /// A release number as this tool compares them. Std-only because the crate
 /// carries no dependencies, and small because it only ever reads two sources:
-/// the marker line in a generated script and an `GREENTOPO_VERSION:` pin in a
+/// the marker line in a generated script and a `GREENTOPO_VERSION:` pin in a
 /// workflow file.
 ///
 /// Prerelease order is kept rather than normalised away: a `1.5.0-rc1` build
@@ -324,7 +324,7 @@ pub enum Status {
     Unchanged,
     /// `--check` only: this would have been written.
     Stale,
-    /// Written by an greentopo newer than this one. Never compared, never
+    /// Written by a greentopo newer than this one. Never compared, never
     /// rewritten, in either mode: two people on different releases would
     /// otherwise take turns rewriting the file.
     Newer,
@@ -336,7 +336,7 @@ pub enum Status {
     Foreign,
 }
 
-/// An `GREENTOPO_VERSION:` pin found in a workflow file.
+/// A `GREENTOPO_VERSION:` pin found in a workflow file.
 #[derive(Debug)]
 pub struct Pin {
     pub path: String,

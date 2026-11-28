@@ -3,7 +3,7 @@
 //!
 //! The same shape as `heads`, for the same reason: a generated file that a
 //! command writes and a check verifies. `pack-fresh` exists because a producer
-//! that publishes an `greentopo.pack` disagreeing with its own records hands every
+//! that publishes a `greentopo.pack` disagreeing with its own records hands every
 //! consumer a decision nobody made. The failure would be invisible at both
 //! ends — the producer resolves from its records, the consumer from the pack,
 //! and only somebody holding both would notice.
@@ -24,7 +24,7 @@ pub fn path(l: &Loaded) -> PathBuf {
 
 /// Whether this corpus publishes at all.
 ///
-/// Only a repository that already has an `greentopo.pack` is held to keeping it
+/// Only a repository that already has a `greentopo.pack` is held to keeping it
 /// current. Publishing is a choice, and a check that fired on every corpus
 /// that had never published would turn a new check into a new failure for
 /// seven repositories that were clean.
