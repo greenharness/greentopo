@@ -68,6 +68,22 @@ fn install_writes_the_script_and_wires_the_hook() {
     assert!(settings(&r).contains("sh .claude/hooks/greentopo-heads.sh"));
 }
 
+/// The rename's sed turned "an aval" into the wrong article for greentopo,
+/// which starts with a consonant, and every install copied it into a
+/// repository. The needles are escaped (`\x61` is "a", `\x60` a backtick) so
+/// this file does not itself carry the phrase a source grep looks for.
+#[test]
+fn the_script_uses_the_article_greentopo_takes() {
+    let r = scratch("article");
+    assert_eq!(run(&r, &["hook", "install"]).code, 0);
+    let script = fs::read_to_string(r.join(".claude/hooks/greentopo-heads.sh")).expect("script");
+    assert!(script.contains("# A greentopo older than"), "{}", script);
+    let lower = script.to_lowercase();
+    for wrong in ["\x61n greentopo", "\x61n \x60greentopo"] {
+        assert!(!lower.contains(wrong), "found {:?} in:\n{}", wrong, script);
+    }
+}
+
 #[test]
 fn installing_twice_changes_nothing() {
     let r = scratch("idempotent");
@@ -309,7 +325,7 @@ fn the_hook_counts_constraints_not_index_lines() {
     );
 }
 
-/// An greentopo older than the hook has no `--index`. The hook falls back to one
+/// A greentopo older than the hook has no `--index`. The hook falls back to one
 /// full id per line rather than dropping every constraint.
 #[test]
 fn the_hook_falls_back_to_full_ids_when_index_is_refused() {
