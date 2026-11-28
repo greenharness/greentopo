@@ -126,11 +126,15 @@ ticket names is empty in decisions outside history.
 
 | Check | Input | Expected | Actual |
 | --- | --- | --- | --- |
-| replacements landed | `git grep -niP "\ban [\x60'\"]?green" -- crates` | empty | |
-| suites | `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all --check` | pass | |
-| piloted hook | branch binary `hook install --write` in a scratch repo, `grep -c "A greentopo" .claude/hooks/greentopo-heads.sh`; `grep -c "An greentopo" .claude/hooks/greentopo-heads.sh` | 3 (lines 17, 103, 133); 0; `diff` against aval's committed 3.0.0 `.claude/hooks/greentopo-heads.sh` changes exactly 4 lines (marker + 3 comments) | |
+| replacements landed | `git grep -niP "\ban [\x60'\"]?green" -- crates` | empty | empty (exit 1) |
+| suites | `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all --check` | pass | pass in the commit gate (27 checks), new test `the_script_uses_the_article_greentopo_takes` ok |
+| piloted hook | branch binary `hook install --write` in a scratch repo, `grep -c "A greentopo" .claude/hooks/greentopo-heads.sh`; `grep -c "An greentopo" .claude/hooks/greentopo-heads.sh` | 3 (lines 17, 103, 133); 0; `diff` against aval's committed 3.0.0 `.claude/hooks/greentopo-heads.sh` changes exactly 4 lines (marker + 3 comments) | 3; 0; 4 lines: the marker and lines 17, 103, 133 |
 | release | `greentopo --version` after install | `greentopo 3.0.1` | |
 | release asset | `gh release view v3.0.1 --repo greenharness/greentopo --json assets` | lists the x86_64-unknown-linux-gnu tarball | |
 | decisions | `git grep -nP -e "\b[Aa]n \x60?greentopo" -e "\b[Aa]n \x60?greenspotter" -- ':!docs/plans' ':!docs/programmes'`; with 3.0.1, `greentopo check`, `greentopo heads --check`, `greentopo pack --check`, `greentopo hook install --check` | grep empty; all four exit 0 | |
+
+## Implementation review
+
+- aval round 1: approve-with-changes (opus, 49k, 38 s); fixed: Actual cells filled for the rows observed before the push; candidate `r` ruled fine (file convention); Cargo.lock checked as text, two version lines only.
 
 <!-- panel: repos=aval,decisions reviewers=backend,lang:rust,platform,tui,unix,codex body-sha=389f8a27baac -->
